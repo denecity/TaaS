@@ -621,6 +621,9 @@ def favicon() -> Response:
     
     return Response(content=b"", media_type='image/x-icon')
 
+
+
+
 # Mount static assets for the web UI
 app.mount("/static", StaticFiles(directory="web/static"), name="static")
 
