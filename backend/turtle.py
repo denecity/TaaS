@@ -54,6 +54,77 @@ class Turtle:
     def is_alive(self) -> bool:
         return self._alive
     
+    async def on_connect(self) -> None:
+        """Handle turtle connection setup and state management."""
+        self._logger.info(f"Turtle {self.id} connected - handling connection setup")
+        
+        # Set connection status in database
+        db_state.set_state(self.id, connection_status="connected")
+        
+        # Update last seen timestamp  
+        db_state.upsert_seen(self.id)
+        
+        # Initialize turtle state (GPS, fuel, coordinates, heading)
+        await self.initialize_state()
+        
+        # Collect firmware-specific state in background
+        asyncio.create_task(self._collect_firmware_state())
+    
+    async def on_disconnect(self) -> None:
+        """Handle turtle disconnection and state cleanup."""
+        self._logger.info(f"Turtle {self.id} disconnected - handling disconnection cleanup")
+        
+        # Set connection status in database
+        db_state.set_state(self.id, connection_status="disconnected")
+    
+    async def _collect_firmware_state(self) -> None:
+        """Collect firmware-specific state from the turtle.
+
+        Data collected:
+        - Inventory (via firmware helper `get_inventory_details()`)
+        - Name label (via firmware helper `get_name_tag()`)
+
+        Dependencies:
+        - Uses firmware helpers from `firmware/kinsky_turtle.lua`
+        """
+        try:
+            async with self.session() as sess:
+                # Inventory (firmware helper)
+                inv_json: Optional[str] = None
+                try:
+                    inv = await sess.eval("get_inventory_details()")
+                    import json as _json
+                    inv_json = _json.dumps(inv)
+                except Exception:
+                    inv_json = None
+                
+                # Name / label
+                label = None
+                try:
+                    label = await sess.eval("get_name_tag()")
+                    if isinstance(label, (int, float)):
+                        label = str(label)
+                    self._logger.info(f"Retrieved label from firmware: {repr(label)}")
+                except Exception as e:
+                    self._logger.warning(f"Failed to get label from firmware: {e}")
+                    label = None
+                
+                # Store inventory if we got it
+                if inv_json is not None:
+                    db_state.set_state(self.id, inventory_json=inv_json)
+                    self._logger.debug(f"Stored inventory for turtle {self.id}")
+                
+                # Store label separately if we got it
+                if label:
+                    self._logger.info(f"Storing label '{label}' for turtle {self.id}")
+                    db_state.set_name_label(self.id, label=label)
+                else:
+                    self._logger.info(f"No label to store for turtle {self.id} (label was: {repr(label)})")
+                
+                self._logger.debug("Firmware state collection completed")
+        except Exception as e:
+            self._logger.warning("Firmware state collection failed: %s", e)
+    
     async def initialize_state(self) -> None:
         """Initialize turtle state in database and detect real position."""
         self._logger.info(f"Initializing turtle {self.id} state in database")

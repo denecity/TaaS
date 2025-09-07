@@ -161,91 +161,53 @@ seen_turtles: Set[int] = set()
 
 # SERVER: Connection event handlers
 async def on_turtle_connect(t: Turtle) -> None:
-    """Server callback when a turtle connects.
+    """Application-level callback when a turtle connects.
 
-    Side effects
-    - Marks turtle as seen in `db_state` and publishes events.
-    - Sets connection status to 'connected' in database.
-    - Launches a background task to collect inventory/label from firmware helpers.
+    Handles application concerns:
+    - Tracking connected turtles in memory
+    - Publishing connection events to WebSocket clients
+    - Logging application-level events
     
-    Note: Basic state (coords, heading, fuel) is now handled by turtle.initialize_state()
-    in the server connection handler.
+    Turtle state management is handled by turtle.on_connect()
     """
-    logger.info("on_connect: Turtle %d connected", t.id)
+    logger.info("Application: Turtle %d connected", t.id)
+    
+    # Track turtle in application memory
     seen_turtles.add(t.id)
-    db_state.upsert_seen(t.id)
-    # Set connection status in database
-    db_state.set_state(t.id, connection_status="connected")
+    
+    # Let turtle handle its own state management
+    await t.on_connect()
+    
+    # Publish application-level events
     await publish({"type": "connected", "turtle_id": t.id, "turtle": build_turtle_summary(t.id)})
     await publish({"type": "log", "turtle_id": t.id, "level": "INFO", "message": f"Turtle {t.id} connected"})
 
-    async def collect_firmware_state() -> None:
-        """Collect firmware-specific state from the turtle.
-
-        Data collected
-        - Inventory (via firmware helper `get_inventory_details()`)
-        - Name label (via firmware helper `get_name_tag()`)
-
-        Persistence & notifications
-        - Writes to `db_state.set_state` and emits a `state_updated` event.
-
-        Dependencies
-        - Uses firmware helpers from `firmware/kinsky_turtle.lua`
-        """
-        try:
-            async with t.session() as sess:
-                # Inventory (firmware helper)
-                inv_json: Optional[str] = None
-                try:
-                    inv = await sess.eval("get_inventory_details()")
-                    import json as _json
-                    inv_json = _json.dumps(inv)
-                except Exception:
-                    inv_json = None
-                
-                # Name / label
-                label = None
-                try:
-                    label = await sess.eval("get_name_tag()")
-                    if isinstance(label, (int, float)):
-                        label = str(label)
-                except Exception:
-                    label = None
-                
-                # Store inventory if we got it
-                if inv_json is not None:
-                    db_state.set_state(t.id, inventory_json=inv_json)
-                
-                # Store label separately if we got it
-                if label:
-                    db_state.set_name_label(t.id, label=label)
-                
-                # Database change notifications will automatically trigger state_updated events
-                logger.debug("Firmware state collection completed for turtle %d", t.id)
-        except Exception as e:
-            logger.warning("collect_firmware_state failed for turtle %d: %s", t.id, e)
-    
-    # Launch firmware state collection without blocking
-    asyncio.create_task(collect_firmware_state())
-
 
 async def on_turtle_disconnect(tid: int) -> None:
-    """Server callback when a turtle disconnects.
+    """Application-level callback when a turtle disconnects.
 
-    - Sets connection status to 'disconnected' in database.
-    - Publishes a disconnected event and marks any running routine as
-      paused/ended in the in-memory assignments.
+    Handles application concerns:
+    - Publishing disconnection events to WebSocket clients
+    - Cleaning up running routines and assignments
+    - Logging application-level events
+    
+    Turtle state management is handled by turtle.on_disconnect()
     """
-    logger.info("on_disconnect: Turtle %d disconnected", tid)
+    logger.info("Application: Turtle %d disconnected", tid)
     
-    # Set connection status in database
-    logger.debug("Setting connection status to disconnected for turtle %d", tid)
-    db_state.set_state(tid, connection_status="disconnected")
-    logger.debug("Database connection status updated for turtle %d", tid)
+    # Get turtle instance to handle its own disconnection
+    t = server.get_turtle(tid)
+    if t:
+        await t.on_disconnect()
+    else:
+        # Turtle already gone, update database directly
+        db_state.set_state(tid, connection_status="disconnected")
     
-    # Note: state_updated event will be triggered automatically by database change
+    # Publish application-level events
     await publish({"type": "disconnected", "turtle_id": tid, "turtle": build_turtle_summary(tid)})
     await publish({"type": "log", "turtle_id": tid, "level": "INFO", "message": f"Turtle {tid} disconnected"})
+    
+    # Clean up application-level state
     if tid in running_tasks and not running_tasks[tid].done():
         running_tasks[tid].cancel()
     if tid in assignments:
@@ -391,9 +353,16 @@ def build_turtle_summary(tid: int) -> Dict[str, Any]:
         st = db_state.get_state(tid)
         last_seen_map = db_state.get_last_seen_map()
         inv = _parse_inventory_json(st.get("inventory"))
-        coords_obj = _coords_to_obj(st.get("coords"))
+        # db_state.get_state() already returns coords in the right format
+        coords_obj = st.get("coords")  # Already a dict like {"x": x, "y": y, "z": z} or None
         # Use database connection status instead of live server state
         alive = st.get("connection_status") == "connected"
+        
+        # Debug logging for label
+        label_value = st.get("label")
+        if tid <= 10:  # Only log for first few turtles to avoid spam
+            logger.debug(f"build_turtle_summary for turtle {tid}: label from db = {repr(label_value)}")
+        
         return {
                 "id": tid,
                 "alive": alive,

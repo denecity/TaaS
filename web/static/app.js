@@ -49,7 +49,7 @@ function inventoryGrid(inv) {
         const count = d && (d.count ?? d.Count ?? d.COUNT ?? null);
         const name = d && (d.displayName ?? d.name ?? null);
         const countText = (count != null) ? String(count) : '';
-        const nameText = name || 'empty';
+        const nameText = name || '';
         cells.push(
             `<div class="slot">
                 <div class="slot-count">${countText}</div>
@@ -339,6 +339,16 @@ function updateTurtleData(turtles) {
         if (yEl) yEl.textContent = coords.y ?? '—';
         if (zEl) zEl.textContent = coords.z ?? '—';
         if (hEl) hEl.textContent = headingToText(t.heading);
+
+        // Update turtle title/label
+        const titleEl = item.querySelector('.title');
+        if (titleEl) {
+            if (t.label) {
+                titleEl.textContent = `${t.label} (#${t.id})`;
+            } else {
+                titleEl.textContent = `Turtle #${t.id}`;
+            }
+        }
 
         // Update inventory only if details panel is not expanded (to avoid focus issues)
         const details = item.querySelector('.details');

@@ -65,9 +65,6 @@ class Server:
         turtle = Turtle(websocket, comp_id, self._logger)
         turtle._start_inbox()
         
-        # Initialize turtle state in database
-        await turtle.initialize_state()
-        
         self._clients[comp_id] = turtle
         self._logger.info(f"connected turtle id={comp_id}")
 
