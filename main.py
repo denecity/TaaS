@@ -94,88 +94,28 @@ async def lifespan(app: FastAPI):
     handler.setLevel(logging.INFO)
     logging.getLogger().addHandler(handler)
 
-    async def on_connect(t: Turtle) -> None:
-        """Server callback when a turtle connects.
-
-        Side effects
-        - Marks turtle as seen in `db_state` and publishes events.
-        - Launches a background task to collect inventory/label from firmware helpers.
+    # Set up database change notifications
+    async def on_database_change(turtle_id: int) -> None:
+        """Callback triggered when turtle state changes in the database.
         
-        Note: Basic state (coords, heading, fuel) is now handled by turtle.initialize_state()
-        in the server connection handler.
+        This creates a clean separation between database changes and frontend updates.
+        Any process that modifies turtle state in the database will automatically
+        trigger frontend updates via this callback.
         """
-        logger.info("on_connect: Turtle %d connected", t.id)
-        seen_turtles.add(t.id)
-        db_state.upsert_seen(t.id)
-        await publish({"type": "connected", "turtle_id": t.id, "turtle": build_turtle_summary(t.id)})
-        await publish({"type": "log", "turtle_id": t.id, "level": "INFO", "message": f"Turtle {t.id} connected"})
+        logger.info("Database change detected for turtle %d, publishing state_updated event", turtle_id)
+        await publish({
+            "type": "state_updated", 
+            "turtle_id": turtle_id, 
+            "turtle": build_turtle_summary(turtle_id)
+        })
+        logger.debug("Published state_updated event for turtle %d", turtle_id)
 
-        async def collect_firmware_state() -> None:
-            """Collect firmware-specific state from the turtle.
+    # Register the database change callback
+    db_state.set_change_callback(on_database_change, asyncio.get_running_loop())
 
-            Data collected
-            - Inventory (via firmware helper `get_inventory_details()`)
-            - Name label (via firmware helper `get_name_tag()`)
-
-            Persistence & notifications
-            - Writes to `db_state.set_state` and emits a `state_updated` event.
-
-            Dependencies
-            - Uses firmware helpers from `firmware/kinsky_turtle.lua`
-            """
-            try:
-                async with t.session() as sess:
-                    # Inventory (firmware helper)
-                    inv_json: Optional[str] = None
-                    try:
-                        inv = await sess.eval("get_inventory_details()")
-                        import json as _json
-                        inv_json = _json.dumps(inv)
-                    except Exception:
-                        inv_json = None
-                    
-                    # Name / label
-                    label = None
-                    try:
-                        label = await sess.eval("get_name_tag()")
-                        if isinstance(label, (int, float)):
-                            label = str(label)
-                    except Exception:
-                        label = None
-                    
-                    # Store inventory if we got it
-                    if inv_json is not None:
-                        db_state.set_state(t.id, inventory_json=inv_json)
-                    
-                    # Store label separately if we got it
-                    if label:
-                        db_state.set_name_label(t.id, label=label)
-                    
-                    # Notify clients to refresh state
-                    await publish({"type": "state_updated", "turtle_id": t.id, "turtle": build_turtle_summary(t.id)})
-            except Exception as e:
-                logger.warning("collect_firmware_state failed for turtle %d: %s", t.id, e)
-        
-        # Launch firmware state collection without blocking
-        asyncio.create_task(collect_firmware_state())
-
-    async def on_disconnect(tid: int) -> None:
-        """Server callback when a turtle disconnects.
-
-        - Publishes a disconnected event and marks any running routine as
-          paused/ended in the in-memory assignments.
-        """
-        logger.info("on_disconnect: Turtle %d disconnected", tid)
-        await publish({"type": "disconnected", "turtle_id": tid, "turtle": build_turtle_summary(tid)})
-        await publish({"type": "log", "turtle_id": tid, "level": "INFO", "message": f"Turtle {tid} disconnected"})
-        if tid in running_tasks and not running_tasks[tid].done():
-            running_tasks[tid].cancel()
-        if tid in assignments:
-            assignments[tid]["status"] = "disconnected"
-
-
-    server.on_connect(on_connect)
-    server.on_disconnect(on_disconnect)
+    # Register turtle connection event handlers
+    server.on_connect(on_turtle_connect)
+    server.on_disconnect(on_turtle_disconnect)
     logger.info("Starting Server() background task")
     await server.start()
     logger.info("TaAS application startup complete")
@@ -217,6 +157,99 @@ event_subscribers: set[WebSocket] = set()
 
 # Track turtle IDs that have been seen during this session
 seen_turtles: Set[int] = set()
+
+
+# SERVER: Connection event handlers
+async def on_turtle_connect(t: Turtle) -> None:
+    """Server callback when a turtle connects.
+
+    Side effects
+    - Marks turtle as seen in `db_state` and publishes events.
+    - Sets connection status to 'connected' in database.
+    - Launches a background task to collect inventory/label from firmware helpers.
+    
+    Note: Basic state (coords, heading, fuel) is now handled by turtle.initialize_state()
+    in the server connection handler.
+    """
+    logger.info("on_connect: Turtle %d connected", t.id)
+    seen_turtles.add(t.id)
+    db_state.upsert_seen(t.id)
+    # Set connection status in database
+    db_state.set_state(t.id, connection_status="connected")
+    await publish({"type": "connected", "turtle_id": t.id, "turtle": build_turtle_summary(t.id)})
+    await publish({"type": "log", "turtle_id": t.id, "level": "INFO", "message": f"Turtle {t.id} connected"})
+
+    async def collect_firmware_state() -> None:
+        """Collect firmware-specific state from the turtle.
+
+        Data collected
+        - Inventory (via firmware helper `get_inventory_details()`)
+        - Name label (via firmware helper `get_name_tag()`)
+
+        Persistence & notifications
+        - Writes to `db_state.set_state` and emits a `state_updated` event.
+
+        Dependencies
+        - Uses firmware helpers from `firmware/kinsky_turtle.lua`
+        """
+        try:
+            async with t.session() as sess:
+                # Inventory (firmware helper)
+                inv_json: Optional[str] = None
+                try:
+                    inv = await sess.eval("get_inventory_details()")
+                    import json as _json
+                    inv_json = _json.dumps(inv)
+                except Exception:
+                    inv_json = None
+                
+                # Name / label
+                label = None
+                try:
+                    label = await sess.eval("get_name_tag()")
+                    if isinstance(label, (int, float)):
+                        label = str(label)
+                except Exception:
+                    label = None
+                
+                # Store inventory if we got it
+                if inv_json is not None:
+                    db_state.set_state(t.id, inventory_json=inv_json)
+                
+                # Store label separately if we got it
+                if label:
+                    db_state.set_name_label(t.id, label=label)
+                
+                # Database change notifications will automatically trigger state_updated events
+                logger.debug("Firmware state collection completed for turtle %d", t.id)
+        except Exception as e:
+            logger.warning("collect_firmware_state failed for turtle %d: %s", t.id, e)
+    
+    # Launch firmware state collection without blocking
+    asyncio.create_task(collect_firmware_state())
+
+
+async def on_turtle_disconnect(tid: int) -> None:
+    """Server callback when a turtle disconnects.
+
+    - Sets connection status to 'disconnected' in database.
+    - Publishes a disconnected event and marks any running routine as
+      paused/ended in the in-memory assignments.
+    """
+    logger.info("on_disconnect: Turtle %d disconnected", tid)
+    
+    # Set connection status in database
+    logger.debug("Setting connection status to disconnected for turtle %d", tid)
+    db_state.set_state(tid, connection_status="disconnected")
+    logger.debug("Database connection status updated for turtle %d", tid)
+    
+    # Note: state_updated event will be triggered automatically by database change
+    await publish({"type": "disconnected", "turtle_id": tid, "turtle": build_turtle_summary(tid)})
+    await publish({"type": "log", "turtle_id": tid, "level": "INFO", "message": f"Turtle {tid} disconnected"})
+    if tid in running_tasks and not running_tasks[tid].done():
+        running_tasks[tid].cancel()
+    if tid in assignments:
+        assignments[tid]["status"] = "disconnected"
 
 
 
@@ -352,15 +385,15 @@ def build_turtle_summary(tid: int) -> Dict[str, Any]:
             coords, heading, and label.
 
         Context
-        - Reads live state from `server.Server` and persisted state from
-            `db_state` (SQLite). Used by list endpoints and WebSocket events.
+        - Reads state from `db_state` (SQLite) including connection status.
+          Used by list endpoints and WebSocket events.
         """
-        t = server.get_turtle(tid)
-        alive = bool(t and t.is_alive())
         st = db_state.get_state(tid)
         last_seen_map = db_state.get_last_seen_map()
         inv = _parse_inventory_json(st.get("inventory"))
         coords_obj = _coords_to_obj(st.get("coords"))
+        # Use database connection status instead of live server state
+        alive = st.get("connection_status") == "connected"
         return {
                 "id": tid,
                 "alive": alive,
