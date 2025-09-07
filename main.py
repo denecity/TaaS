@@ -36,7 +36,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
 
 from backend.server import Server
-from backend.turtle_handler import Turtle
+from backend.turtle import Turtle
 import backend.db_state as db_state
 from routines import discover_routines
 from routines.base import Routine
@@ -99,8 +99,10 @@ async def lifespan(app: FastAPI):
 
         Side effects
         - Marks turtle as seen in `db_state` and publishes events.
-        - Launches a background task to collect fuel/inventory/coords/heading
-          via the turtle session APIs and persists them with `db_state`.
+        - Launches a background task to collect inventory/label from firmware helpers.
+        
+        Note: Basic state (coords, heading, fuel) is now handled by turtle.initialize_state()
+        in the server connection handler.
         """
         logger.info("on_connect: Turtle %d connected", t.id)
         seen_turtles.add(t.id)
@@ -108,30 +110,21 @@ async def lifespan(app: FastAPI):
         await publish({"type": "connected", "turtle_id": t.id, "turtle": build_turtle_summary(t.id)})
         await publish({"type": "log", "turtle_id": t.id, "level": "INFO", "message": f"Turtle {t.id} connected"})
 
-        async def collect_and_store_state() -> None:
-            """Collect live state from the turtle and persist it.
+        async def collect_firmware_state() -> None:
+            """Collect firmware-specific state from the turtle.
 
             Data collected
-            - Fuel level, inventory (via firmware helper), name label, GPS
-              coordinates, and inferred heading.
+            - Inventory (via firmware helper `get_inventory_details()`)
+            - Name label (via firmware helper `get_name_tag()`)
 
             Persistence & notifications
             - Writes to `db_state.set_state` and emits a `state_updated` event.
 
             Dependencies
-            - Requires GPS availability on the turtle for coords/heading.
-            - Uses firmware helpers `get_inventory_details()` and
-              `get_name_tag()` from `firmware/kinsky_turtle.lua` (called via
-              `sess.eval`).
+            - Uses firmware helpers from `firmware/kinsky_turtle.lua`
             """
             try:
                 async with t.session() as sess:
-                    # Fuel
-                    try:
-                        fuel = await sess.get_fuel_level()
-                        fuel_int = int(fuel) if fuel is not None else None
-                    except Exception:
-                        fuel_int = None
                     # Inventory (firmware helper)
                     inv_json: Optional[str] = None
                     try:
@@ -140,6 +133,7 @@ async def lifespan(app: FastAPI):
                         inv_json = _json.dumps(inv)
                     except Exception:
                         inv_json = None
+                    
                     # Name / label
                     label = None
                     try:
@@ -148,67 +142,22 @@ async def lifespan(app: FastAPI):
                             label = str(label)
                     except Exception:
                         label = None
+                    
+                    # Store inventory if we got it
+                    if inv_json is not None:
+                        db_state.set_state(t.id, inventory_json=inv_json)
+                    
+                    # Store label separately if we got it
                     if label:
                         db_state.set_name_label(t.id, label=label)
-                    # Coords by GPS
-                    coords_tuple: Optional[Tuple[int, int, int]] = None
-                    try:
-                        loc = await sess.eval("(function() local x,y,z=gps.locate(2); return x,y,z end)()")
-                        if isinstance(loc, list) and len(loc) >= 3 and all(isinstance(v, (int, float)) for v in loc[:3]):
-                            x, y, z = int(loc[0]), int(loc[1]), int(loc[2])
-                            coords_tuple = (x, y, z)
-                    except Exception:
-                        coords_tuple = None
-                    if coords_tuple is None:
-                        coords_tuple = (0, 0, 0)
-                    # Heading by probing forward into air (requires GPS)
-                    heading_val: Optional[int] = None
-                    if coords_tuple != (0, 0, 0):
-                        rotations = 0
-                        found_air_dir: Optional[int] = None
-                        for i in range(4):
-                            try:
-                                ok, _info = await sess.inspect()
-                                if not ok:
-                                    found_air_dir = i
-                                    break
-                            except Exception:
-                                pass
-                            await sess.turn_right()
-                            rotations += 1
-                        if found_air_dir is not None:
-                            try:
-                                loc1 = coords_tuple
-                                await sess.forward()
-                                loc2_list = await sess.eval("(function() local x,y,z=gps.locate(2); return x,y,z end)()")
-                                await sess.back()
-                                for _ in range(rotations):
-                                    await sess.turn_left()
-                                if isinstance(loc2_list, list) and len(loc2_list) >= 3 and all(isinstance(v, (int, float)) for v in loc2_list[:3]):
-                                    x2, y2, z2 = int(loc2_list[0]), int(loc2_list[1]), int(loc2_list[2])
-                                    dx, dz = x2 - loc1[0], z2 - loc1[2]
-                                    if dx == 1 and dz == 0:
-                                        heading_val = 0  # +X
-                                    elif dx == -1 and dz == 0:
-                                        heading_val = 2  # -X
-                                    elif dz == 1 and dx == 0:
-                                        heading_val = 1  # +Z
-                                    elif dz == -1 and dx == 0:
-                                        heading_val = 3  # -Z
-                            except Exception:
-                                try:
-                                    for _ in range(rotations):
-                                        await sess.turn_left()
-                                except Exception:
-                                    pass
-                    # Store
-                    db_state.set_state(t.id, fuel_level=fuel_int, inventory_json=inv_json, coords=coords_tuple, heading=heading_val)
-                    # Notify clients to refresh state (label/coords/heading)
+                    
+                    # Notify clients to refresh state
                     await publish({"type": "state_updated", "turtle_id": t.id, "turtle": build_turtle_summary(t.id)})
             except Exception as e:
-                logger.warning("collect_and_store_state failed for turtle %d: %s", t.id, e)
-        # launch without blocking
-        asyncio.create_task(collect_and_store_state())
+                logger.warning("collect_firmware_state failed for turtle %d: %s", t.id, e)
+        
+        # Launch firmware state collection without blocking
+        asyncio.create_task(collect_firmware_state())
 
     async def on_disconnect(tid: int) -> None:
         """Server callback when a turtle disconnects.
