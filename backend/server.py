@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 import websockets
 
-from turtle_handler import Turtle
+from backend.turtle_handler import Turtle
 
 
 OnConnectCallback = Callable[["Turtle"], Awaitable[None]]

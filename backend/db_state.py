@@ -2,15 +2,18 @@ import os
 import sqlite3
 import time
 from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
 
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-DB_PATH = os.path.join(DATA_DIR, "turtles.db")
+# Use project-relative data directory
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = _PROJECT_ROOT / "data"
+DB_PATH = DATA_DIR / "turtles.db"
 
 
 def _conn() -> sqlite3.Connection:
-    os.makedirs(DATA_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 

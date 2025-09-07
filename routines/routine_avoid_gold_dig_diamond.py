@@ -3,7 +3,7 @@ from collections import deque
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .base import Routine
-from server import Turtle
+from backend.server import Turtle
 
 
 Vec3 = Tuple[int, int, int]

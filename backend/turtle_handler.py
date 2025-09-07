@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 import websockets
 
-import db_state
+import backend.db_state as db_state
 
 
 class Turtle:

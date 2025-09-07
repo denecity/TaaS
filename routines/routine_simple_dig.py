@@ -2,7 +2,7 @@ import logging
 from typing import Any
 
 from .base import Routine
-from server import Turtle
+from backend.server import Turtle
 
 
 class SimpleDigRoutine(Routine):
