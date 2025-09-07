@@ -409,13 +409,49 @@ async function bootstrap() {
                     const existingTurtle = el.list.querySelector(`.turtle[data-id="${t.id}"]`);
 
                     if (!existingTurtle && data.type === 'connected') {
-                        // New turtle connected - need to add it to the list
-                        dbg('New turtle connected, refreshing list');
+                        // New turtle connected - add it directly from event data (no HTTP call needed)
+                        dbg('New turtle connected, adding to list from event data');
                         try {
-                            const [turtles] = await Promise.all([fetchJSON('/turtles')]);
-                            renderList(turtles, cachedRoutines);
+                            // Create HTML for new turtle and insert it in the right position (sorted)
+                            const turtleHtml = renderTurtle(t);
+                            const tempDiv = document.createElement('div');
+                            tempDiv.innerHTML = turtleHtml;
+                            const newTurtleElement = tempDiv.firstElementChild;
+
+                            // Find the right position to insert (connected turtles first, then by ID)
+                            const allTurtles = Array.from(el.list.querySelectorAll('.turtle'));
+                            let insertBefore = null;
+
+                            for (const existingEl of allTurtles) {
+                                const existingId = parseInt(existingEl.dataset.id);
+                                const existingStatus = existingEl.querySelector('.status');
+                                const existingConnected = existingStatus?.classList.contains('connected');
+
+                                // New turtle is connected, so it should go before disconnected turtles
+                                if (!existingConnected) {
+                                    insertBefore = existingEl;
+                                    break;
+                                }
+                                // Among connected turtles, sort by ID
+                                if (existingConnected && t.id < existingId) {
+                                    insertBefore = existingEl;
+                                    break;
+                                }
+                            }
+
+                            // Insert the new turtle element
+                            if (insertBefore) {
+                                el.list.insertBefore(newTurtleElement, insertBefore);
+                            } else {
+                                el.list.appendChild(newTurtleElement);
+                            }
+
+                            // Bind event handlers for the new turtle
+                            bindItemHandlers(newTurtleElement, cachedRoutines);
+
+                            dbg('Successfully added new turtle to list');
                         } catch (e) {
-                            dbg('Error refreshing turtle list for new connection', e);
+                            dbg('Error adding new turtle to list', e);
                         }
                     } else if (existingTurtle) {
                         // Update existing turtle's data in real-time

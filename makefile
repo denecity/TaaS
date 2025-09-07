@@ -4,11 +4,9 @@ VENV_BIN := $(VENV)/bin
 
 .PHONY: tunnel venv install run stop tunnelnt frontend
 
-frontend:
-	$(VENV_BIN)/python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
 run:
-	$(VENV_BIN)/python event_handler.py
+	$(VENV_BIN)/python -m uvicorn main:app --host 0.0.0.0 --port 8000
 
 stop:
 	-pkill -f "uvicorn .*main:app" 2>/dev/null || true

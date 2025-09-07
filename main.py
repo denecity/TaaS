@@ -27,8 +27,10 @@ import logging
 import json
 import re
 import traceback
+import shutil
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Set, Optional, Tuple
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
@@ -42,8 +44,38 @@ from routines import discover_routines
 from routines.base import Routine
 
 
+# Set up logging with both console and file output
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("orchestrator")
+
+
+class ColoredConsoleFormatter(logging.Formatter):
+    """Custom formatter that adds color codes to log levels for console output."""
+    
+    # ANSI color codes
+    COLORS = {
+        'DEBUG': '\033[36m',      # Cyan
+        'INFO': '\033[32m',       # Green  
+        'WARNING': '\033[33m',    # Yellow
+        'ERROR': '\033[31m',      # Red
+        'CRITICAL': '\033[41m',   # Red background
+    }
+    RESET = '\033[0m'  # Reset to default color
+    
+    def format(self, record):
+        # Get the color for this log level
+        color = self.COLORS.get(record.levelname, '')
+        
+        # Format the record normally
+        formatted = super().format(record)
+        
+        # Only colorize the level name part
+        if color:
+            # Replace the level name with colored version
+            colored_level = f"{color}{record.levelname}{self.RESET}"
+            formatted = formatted.replace(record.levelname, colored_level, 1)
+            
+        return formatted
 
 
 @asynccontextmanager
@@ -54,6 +86,33 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     logger.info("Starting up TaAS application...")
+    
+    # Set up file logging - clear logs directory on startup for debugging
+    logs_dir = Path("logs")
+    if logs_dir.exists():
+        shutil.rmtree(logs_dir)
+    logs_dir.mkdir(exist_ok=True)
+    
+    # Remove default handlers to customize console and file output separately
+    root_logger = logging.getLogger()
+    for handler in root_logger.handlers[:]:
+        root_logger.removeHandler(handler)
+    
+    # Add colored console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = ColoredConsoleFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    console_handler.setFormatter(console_formatter)
+    root_logger.addHandler(console_handler)
+    
+    # Add plain file handler (no colors in files)
+    file_handler = logging.FileHandler(logs_dir / "taas.log", mode='w')
+    file_handler.setLevel(logging.DEBUG)
+    file_formatter = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+    file_handler.setFormatter(file_formatter)
+    root_logger.addHandler(file_handler)
+
+    
     db_state.init()
 
     # Forward routine and app logs to websocket subscribers
