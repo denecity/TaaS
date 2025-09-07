@@ -371,16 +371,7 @@ async function bootstrap() {
         }
     }, 1000);
 
-    // Gentle polling to reflect DB-driven updates (fuel, coords, heading, label, inventory)
-    const POLL_MS = 3000;
-    setInterval(async () => {
-        try {
-            const list = await fetchJSON('/turtles');
-            updateTurtleData(list);
-        } catch (e) { dbg('poll error', e); }
-    }, POLL_MS);
-
-    // WebSocket events for quicker UI feedback; polling remains the source of truth
+    // Real-time updates via WebSocket events only - no polling needed
     let cachedRoutines = routinesRaw;
 
     // WebSocket events
@@ -399,31 +390,88 @@ async function bootstrap() {
             const data = JSON.parse(ev.data);
             dbg('ws msg', data);
             if (!data || !data.type) return;
+
+            // Handle turtle connection/disconnection and state updates
             if (data.type === 'connected' || data.type === 'disconnected' || data.type === 'state_updated') {
                 const t = data.turtle;
                 if (t && typeof t === 'object') {
-                    updateTurtleData([t]);
+                    // Check if this turtle already exists in the UI
+                    const existingTurtle = el.list.querySelector(`.turtle[data-id="${t.id}"]`);
+
+                    if (!existingTurtle && data.type === 'connected') {
+                        // New turtle connected - need to add it to the list
+                        dbg('New turtle connected, refreshing list');
+                        try {
+                            const [turtles] = await Promise.all([fetchJSON('/turtles')]);
+                            renderList(turtles, cachedRoutines);
+                        } catch (e) {
+                            dbg('Error refreshing turtle list for new connection', e);
+                        }
+                    } else if (existingTurtle) {
+                        // Update existing turtle's data in real-time
+                        updateTurtleData([t]);
+
+                        // Update connection status
+                        const statusEl = existingTurtle.querySelector('.status');
+                        const titleEl = existingTurtle.querySelector('.title');
+
+                        if (statusEl) {
+                            if (data.type === 'connected') {
+                                statusEl.textContent = 'connected';
+                                statusEl.className = 'status connected';
+                            } else if (data.type === 'disconnected') {
+                                statusEl.textContent = 'disconnected';
+                                statusEl.className = 'status disconnected';
+                            }
+                        }
+
+                        // Update title if label changed
+                        if (titleEl && t.label) {
+                            titleEl.textContent = `${t.label} (#${t.id})`;
+                        } else if (titleEl) {
+                            titleEl.textContent = `Turtle #${t.id}`;
+                        }
+                    }
                 }
-            } else if (data.type?.startsWith('routine_')) {
+            }
+            // Handle routine lifecycle events
+            else if (data.type?.startsWith('routine_')) {
                 const tEl = el.list.querySelector(`.turtle[data-id="${data.turtle_id}"]`);
                 if (tEl) {
                     turtleConsole(data.turtle_id).push(`[event] ${data.type}${data.error ? ' ' + data.error : ''}`);
+
                     const toggle = tEl.querySelector('.toggle');
-                    if (toggle) {
-                        if (data.type === 'routine_started') toggle.textContent = 'Stop';
-                        if (data.type === 'routine_paused') toggle.textContent = 'Continue';
-                        if (data.type === 'routine_finished' || data.type === 'routine_cancelled' || data.type === 'routine_failed') toggle.textContent = 'Start';
-                    }
                     const routineEl = tEl.querySelector('.routine-name');
-                    if (routineEl && data.routine) routineEl.textContent = data.routine;
-                }
-            } else if (data.type === 'log') {
-                if (data.turtle_id != null) {
-                    turtleConsole(data.turtle_id).push(data.message);
-                    // Do not re-render the entire list on every log; preserve expanded state
+
+                    if (toggle) {
+                        if (data.type === 'routine_started') {
+                            toggle.textContent = 'Stop';
+                        } else if (data.type === 'routine_paused') {
+                            toggle.textContent = 'Continue';
+                        } else if (data.type === 'routine_finished' || data.type === 'routine_cancelled' || data.type === 'routine_failed') {
+                            toggle.textContent = 'Start';
+                        }
+                    }
+
+                    // Update routine name display
+                    if (routineEl) {
+                        if (data.routine) {
+                            routineEl.textContent = data.routine;
+                        } else if (data.type === 'routine_finished' || data.type === 'routine_cancelled' || data.type === 'routine_failed') {
+                            routineEl.textContent = '—';
+                        }
+                    }
                 }
             }
-        } catch (e) { dbg('ws message handler error', e); }
+            // Handle log messages
+            else if (data.type === 'log') {
+                if (data.turtle_id != null) {
+                    turtleConsole(data.turtle_id).push(data.message);
+                }
+            }
+        } catch (e) {
+            dbg('ws message handler error', e);
+        }
     });
 }
 

@@ -27,6 +27,7 @@ import logging
 import json
 import re
 import traceback
+from contextlib import asynccontextmanager
 from typing import Any, Dict, Set, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -44,146 +45,15 @@ from routines.base import Routine
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("orchestrator")
 
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
-server = Server()
-routine_registry: Dict[str, Routine] = discover_routines()
-logger.info("Discovered routines: %s", list(routine_registry.keys()))
-running_tasks: Dict[int, asyncio.Task] = {}
-assignments: Dict[int, Dict[str, Any]] = {}
-event_subscribers: set[WebSocket] = set()
-seen_turtles: Set[int] = set()
-
-
-def _coords_to_obj(val: Any) -> Optional[Dict[str, int]]:
-    """Convert a sequence of 3 numbers into a coordinates dict.
-
-    Parameters
-    - val: Any value expected to be a list/tuple like ``[x, y, z]``.
-
-    Returns
-    - dict with keys ``{"x", "y", "z"}`` if convertible, else ``None``.
-
-    Context
-    - Used when shaping data persisted by `db_state` into API-friendly output
-      for clients (see `build_turtle_summary`).
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle application startup and shutdown.
+    
+    This replaces the deprecated @app.on_event("startup") and @app.on_event("shutdown").
     """
-    try:
-        if isinstance(val, (list, tuple)) and len(val) >= 3:
-            x, y, z = int(val[0]), int(val[1]), int(val[2])
-            return {"x": x, "y": y, "z": z}
-    except Exception:
-        pass
-    return None
-
-
-def _parse_inventory_json(inv_val: Any) -> Any:
-        """Parse inventory JSON string into a Python object if applicable.
-
-        Parameters
-        - inv_val: Value stored under the "inventory" key in `db_state`.
-
-        Returns
-        - Parsed Python object if ``inv_val`` is a JSON string, ``None`` if
-            parsing fails, or the original value if already structured.
-
-        Context
-        - Inventory snapshots are stored via `db_state.set_state` by
-            `startup() -> collect_and_store_state()` using firmware helpers defined
-            in `firmware/kinsky_turtle.lua`.
-        """
-        if isinstance(inv_val, str):
-                try:
-                        return json.loads(inv_val)
-                except Exception:
-                        return None
-        return inv_val
-
-
-def build_turtle_summary(tid: int) -> Dict[str, Any]:
-        """Build a summarized view of a turtle for API responses.
-
-        Parameters
-        - tid: Turtle id.
-
-        Returns
-        - Dict containing connectivity, assignment, last seen, fuel, inventory,
-            coords, heading, and label.
-
-        Context
-        - Reads live state from `server.Server` and persisted state from
-            `db_state` (SQLite). Used by list endpoints and WebSocket events.
-        """
-        t = server.get_turtle(tid)
-        alive = bool(t and t.is_alive())
-        st = db_state.get_state(tid)
-        last_seen_map = db_state.get_last_seen_map()
-        inv = _parse_inventory_json(st.get("inventory"))
-        coords_obj = _coords_to_obj(st.get("coords"))
-        return {
-                "id": tid,
-                "alive": alive,
-                "assignment": assignments.get(tid),
-                "last_seen_ms": last_seen_map.get(tid, 0),
-                "fuel_level": st.get("fuel_level"),
-                "inventory": inv,
-                "coords": coords_obj,
-                "heading": st.get("heading"),
-                "label": st.get("label"),
-        }
-
-
-async def publish(event: Dict[str, Any]) -> None:
-    """Broadcast an event to all connected WebSocket subscribers.
-
-    Parameters
-    - event: JSON-serializable payload.
-
-    Notes
-    - Removes dead subscribers on send failures.
-    - Used by lifecycle hooks, routine execution, and state updates.
-    """
-    try:
-        dead = []
-        for ws in list(event_subscribers):
-            try:
-                # Time-bound to avoid blocking under backpressure
-                await asyncio.wait_for(ws.send_json(event), timeout=0.2)
-            except Exception as e:
-                logger.debug("publish: send failed, marking subscriber dead: %s", e)
-                dead.append(ws)
-        for ws in dead:
-            try:
-                event_subscribers.remove(ws)
-            except KeyError:
-                pass
-        if dead:
-            logger.info("publish: removed %d dead subscribers", len(dead))
-    except Exception as e:
-        logger.error("publish: unexpected error: %s", e)
-
-
-@app.on_event("startup")
-async def startup() -> None:
-    """Initialize persistent state, logging, and the turtle server.
-
-    What happens
-    - Initializes the SQLite DB via `db_state.init()`.
-    - Installs a logging handler that forwards logs to `/events` subscribers.
-    - Registers connection lifecycle callbacks with `server.Server` and starts
-      its background task.
-
-    Cross-file dependencies
-    - Uses `server.Server`, `turtle_handler.Turtle`, `db_state`, and firmware
-      helpers invoked through turtle sessions.
-    """
+    # Startup
+    logger.info("Starting up TaAS application...")
     db_state.init()
 
     # Forward routine and app logs to websocket subscribers
@@ -354,73 +224,62 @@ async def startup() -> None:
         if tid in assignments:
             assignments[tid]["status"] = "disconnected"
 
+
     server.on_connect(on_connect)
     server.on_disconnect(on_disconnect)
     logger.info("Starting Server() background task")
     await server.start()
-    # Web UI is served as static assets; no UI framework initialization needed.
-
-
-@app.on_event("shutdown")
-async def shutdown() -> None:
-    """Stop background tasks and the turtle server cleanly."""
+    logger.info("TaAS application startup complete")
+    
+    # Yield control to the application
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down TaAS application...")
     logger.info("Shutdown: cancelling %d tasks", len(running_tasks))
     for task in list(running_tasks.values()):
         task.cancel()
     await server.stop()
+    logger.info("TaAS application shutdown complete")
 
 
-@app.get("/turtles")
-def list_turtles():
-    """List all known turtles with summarized state.
+app = FastAPI(lifespan=lifespan) # Create the FastAPI application instance with custom lifespan management
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow requests from any domain
+    allow_credentials=True,  # Allow cookies and authentication headers
+    allow_methods=["*"],  # Allow all HTTP methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allow all request headers
+)
 
-    Source of truth
-    - Union of ids from `db_state.list_all_ids()`, currently connected turtles
-      from `server.list_turtles()`, and an in-memory set of `seen_turtles`.
-    - Each turtle is shaped via `build_turtle_summary`.
-    """
-    logger.debug("GET /turtles")
-    # Use DB-known turtles plus currently connected
-    try:
-        all_known = set(db_state.list_all_ids())
-    except Exception:
-        all_known = set()
-    connected_now = set(server.list_turtles())
-    ids = sorted(all_known | connected_now | set(seen_turtles))
-    return [build_turtle_summary(tid) for tid in ids]
+server = Server() # Initialize the TCP server that manages connections to ComputerCraft turtles
 
+routine_registry: Dict[str, Routine] = discover_routines()
+logger.info(f"Discovered {len(routine_registry)} routines: {list(routine_registry.keys())}")
 
-@app.get("/turtles/{tid}")
-def turtle_status(tid: int):
-    """Return liveness and assignment status for a connected turtle.
+# Track running routine tasks by turtle ID to enable cancellation
+running_tasks: Dict[int, asyncio.Task] = {}
 
-    Raises
-    - 404 if the turtle is not currently connected per `server.get_turtle()`.
-    """
-    logger.debug("GET /turtles/%d", tid)
-    t = server.get_turtle(tid)
-    if not t:
-        raise HTTPException(404, "turtle not connected")
-    return {"id": tid, "alive": t.is_alive(), "assignment": assignments.get(tid)}
+# Store current routine assignments (name, status, config) per turtle
+assignments: Dict[int, Dict[str, Any]] = {}
+
+# Set of active WebSocket connections for broadcasting events
+event_subscribers: set[WebSocket] = set()
+
+# Track turtle IDs that have been seen during this session
+seen_turtles: Set[int] = set()
 
 
-@app.get("/routines")
-def list_routines():
-    """Enumerate registered routines from the `routines` package.
-
-    Returns name, description, and a config template for each routine.
-    """
-    logger.debug("GET /routines -> %d routines", len(routine_registry))
-    out = []
-    for name, routine in routine_registry.items():
-        out.append({
-            "name": name,
-            "description": routine.description,
-            "config_template": routine.config_template,
-        })
-    return out
 
 
+
+
+
+###############################
+# SERVER (backend)
+###############################
+
+# SERVER: REST endpoint to start executing a routine on a specific turtle
 @app.post("/turtles/{tid}/run")
 async def run_routine(tid: int, body: Dict[str, Any]):
     """Start a routine on a turtle.
@@ -495,6 +354,7 @@ async def run_routine(tid: int, body: Dict[str, Any]):
     return {"accepted": True}
 
 
+# SERVER: REST endpoint to cancel a currently running turtle routine
 @app.post("/turtles/{tid}/cancel")
 async def cancel_routine(tid: int):
     
@@ -507,6 +367,216 @@ async def cancel_routine(tid: int):
     return {"cancelled": False}
 
 
+# SERVER: Helper function for parsing turtle inventory data from database storage
+def _parse_inventory_json(inv_val: Any) -> Any:
+        """Parse inventory JSON string into a Python object if applicable.
+
+        Parameters
+        - inv_val: Value stored under the "inventory" key in `db_state`.
+
+        Returns
+        - Parsed Python object if ``inv_val`` is a JSON string, ``None`` if
+            parsing fails, or the original value if already structured.
+
+        Context
+        - Inventory snapshots are stored via `db_state.set_state` by
+            `startup() -> collect_and_store_state()` using firmware helpers defined
+            in `firmware/kinsky_turtle.lua`.
+        """
+        if isinstance(inv_val, str):
+                try:
+                        return json.loads(inv_val)
+                except Exception:
+                        return None
+        return inv_val
+
+
+# SERVER: Build comprehensive turtle status summary combining live and stored data
+def build_turtle_summary(tid: int) -> Dict[str, Any]:
+        """Build a summarized view of a turtle for API responses.
+
+        Parameters
+        - tid: Turtle id.
+
+        Returns
+        - Dict containing connectivity, assignment, last seen, fuel, inventory,
+            coords, heading, and label.
+
+        Context
+        - Reads live state from `server.Server` and persisted state from
+            `db_state` (SQLite). Used by list endpoints and WebSocket events.
+        """
+        t = server.get_turtle(tid)
+        alive = bool(t and t.is_alive())
+        st = db_state.get_state(tid)
+        last_seen_map = db_state.get_last_seen_map()
+        inv = _parse_inventory_json(st.get("inventory"))
+        coords_obj = _coords_to_obj(st.get("coords"))
+        return {
+                "id": tid,
+                "alive": alive,
+                "assignment": assignments.get(tid),
+                "last_seen_ms": last_seen_map.get(tid, 0),
+                "fuel_level": st.get("fuel_level"),
+                "inventory": inv,
+                "coords": coords_obj,
+                "heading": st.get("heading"),
+                "label": st.get("label"),
+        }
+
+
+# APP: Broadcast events to all connected WebSocket clients
+async def publish(event: Dict[str, Any]) -> None:
+    """Broadcast an event to all connected WebSocket subscribers.
+
+    Parameters
+    - event: JSON-serializable payload.
+
+    Notes
+    - Removes dead subscribers on send failures.
+    - Used by lifecycle hooks, routine execution, and state updates.
+    """
+    try:
+        dead = []
+        for ws in list(event_subscribers):
+            try:
+                # Time-bound to avoid blocking under backpressure
+                await asyncio.wait_for(ws.send_json(event), timeout=0.2)
+            except Exception as e:
+                logger.debug("publish: send failed, marking subscriber dead: %s", e)
+                dead.append(ws)
+        for ws in dead:
+            try:
+                event_subscribers.remove(ws)
+            except KeyError:
+                pass
+        if dead:
+            logger.info("publish: removed %d dead subscribers", len(dead))
+    except Exception as e:
+        logger.error("publish: unexpected error: %s", e)
+
+
+# SERVER: REST endpoint to continue/restart the last routine on a turtle
+@app.post("/turtles/{tid}/continue")
+async def continue_routine(tid: int):
+    
+    """Re-run the most recent routine for a turtle with its last config."""
+    
+    logger.info("POST /turtles/%d/continue", tid)
+    last = assignments.get(tid)
+    if not last or not last.get("routine"):
+        raise HTTPException(404, "no previous routine")
+    return await run_routine(tid, {"routine": last["routine"], "config": last.get("config")})
+
+
+# SERVER: REST endpoint to restart/reboot a turtle (placeholder implementation)
+@app.post("/turtles/{tid}/restart")
+async def restart_turtle(tid: int):
+    
+    """Placeholder endpoint to request a turtle restart.
+
+    Note: Currently a no-op beyond validating connectivity and opening a
+    session. Future implementations could send a reboot command.
+    """
+    
+    logger.info("POST /turtles/%d/restart", tid)
+    t = server.get_turtle(tid)
+    if not t or not t.is_alive():
+        raise HTTPException(404, "turtle not connected")
+    async with t.session() as sess:
+        pass
+    return {"accepted": True}
+
+
+
+
+
+
+
+
+
+###############################
+# APP (frontend)
+###############################
+
+# APP: REST endpoint to list all known turtles with their current status
+@app.get("/turtles")
+def list_turtles():
+    """List all known turtles with summarized state.
+
+    Source of truth
+    - Union of ids from `db_state.list_all_ids()`, currently connected turtles
+      from `server.list_turtles()`, and an in-memory set of `seen_turtles`.
+    - Each turtle is shaped via `build_turtle_summary`.
+    """
+    logger.debug("GET /turtles")
+    # Use DB-known turtles plus currently connected
+    try:
+        all_known = set(db_state.list_all_ids())
+    except Exception:
+        all_known = set()
+    connected_now = set(server.list_turtles())
+    ids = sorted(all_known | connected_now | set(seen_turtles))
+    return [build_turtle_summary(tid) for tid in ids]
+
+
+# APP: REST endpoint to get status of a specific turtle
+@app.get("/turtles/{tid}")
+def turtle_status(tid: int):
+    """Return liveness and assignment status for a connected turtle.
+
+    Raises
+    - 404 if the turtle is not currently connected per `server.get_turtle()`.
+    """
+    logger.debug("GET /turtles/%d", tid)
+    t = server.get_turtle(tid)
+    if not t:
+        raise HTTPException(404, "turtle not connected")
+    return {"id": tid, "alive": t.is_alive(), "assignment": assignments.get(tid)}
+
+
+# APP: REST endpoint to list all available turtle routines
+@app.get("/routines")
+def list_routines():
+    """Enumerate registered routines from the `routines` package.
+
+    Returns name, description, and a config template for each routine.
+    """
+    logger.debug("GET /routines -> %d routines", len(routine_registry))
+    out = []
+    for name, routine in routine_registry.items():
+        out.append({
+            "name": name,
+            "description": routine.description,
+            "config_template": routine.config_template,
+        })
+    return out
+
+
+# APP: Helper function for formatting turtle coordinate data for web API responses
+def _coords_to_obj(val: Any) -> Optional[Dict[str, int]]:
+    """Convert a sequence of 3 numbers into a coordinates dict.
+
+    Parameters
+    - val: Any value expected to be a list/tuple like ``[x, y, z]``.
+
+    Returns
+    - dict with keys ``{"x", "y", "z"}`` if convertible, else ``None``.
+
+    Context
+    - Used when shaping data persisted by `db_state` into API-friendly output
+      for clients (see `build_turtle_summary`).
+    """
+    try:
+        if isinstance(val, (list, tuple)) and len(val) >= 3:
+            x, y, z = int(val[0]), int(val[1]), int(val[2])
+            return {"x": x, "y": y, "z": z}
+    except Exception:
+        pass
+    return None
+
+
+# APP: WebSocket endpoint for real-time event streaming to web clients
 @app.websocket("/events")
 async def events(ws: WebSocket):
     
@@ -534,37 +604,8 @@ async def events(ws: WebSocket):
         logger.info("/events: removed subscriber; subscribers=%d", len(event_subscribers))
 
 
-@app.post("/turtles/{tid}/continue")
-async def continue_routine(tid: int):
-    
-    """Re-run the most recent routine for a turtle with its last config."""
-    
-    logger.info("POST /turtles/%d/continue", tid)
-    last = assignments.get(tid)
-    if not last or not last.get("routine"):
-        raise HTTPException(404, "no previous routine")
-    return await run_routine(tid, {"routine": last["routine"], "config": last.get("config")})
-
-
-@app.post("/turtles/{tid}/restart")
-async def restart_turtle(tid: int):
-    
-    """Placeholder endpoint to request a turtle restart.
-
-    Note: Currently a no-op beyond validating connectivity and opening a
-    session. Future implementations could send a reboot command.
-    """
-    
-    logger.info("POST /turtles/%d/restart", tid)
-    t = server.get_turtle(tid)
-    if not t or not t.is_alive():
-        raise HTTPException(404, "turtle not connected")
-    async with t.session() as sess:
-        pass
-    return {"accepted": True}
-
-
-@app.get("/", include_in_schema=False)
+# APP: Serve the main web dashboard HTML page
+@app.get("/")
 def dashboard_root() -> FileResponse:
     
     """Serve the web dashboard entrypoint from `web/static/index.html`."""
@@ -572,7 +613,8 @@ def dashboard_root() -> FileResponse:
     return FileResponse("web/static/index.html")
 
 
-@app.get('/favicon.ico', include_in_schema=False)
+# APP: Serve empty favicon to prevent browser 404 errors
+@app.get('/favicon.ico')
 def favicon() -> Response:
     
     """Return an empty favicon to avoid 404 noise in logs."""
@@ -580,6 +622,6 @@ def favicon() -> Response:
     return Response(content=b"", media_type='image/x-icon')
 
 # Mount static assets for the web UI
-app.mount("", StaticFiles(directory="web"), name="static")
+app.mount("/static", StaticFiles(directory="web/static"), name="static")
 
 

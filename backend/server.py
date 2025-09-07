@@ -16,6 +16,7 @@ class Server:
     """WebSocket gateway for turtles. Importable and event-driven."""
 
     def __init__(self, host: str = "0.0.0.0", port: int = 5000, *, logger: Optional[logging.Logger] = None) -> None:
+        print("IN THE SERVER INIT")
         self._host = host
         self._port = port
         self._server: Optional[websockets.Server] = None

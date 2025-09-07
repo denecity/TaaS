@@ -2,10 +2,8 @@ import asyncio
 import logging
 from typing import Optional
 
-from server import Server, Turtle
+from backend.server import Server, Turtle
 
-from routines.routine_simple_dig import simple_dig_routine
-from routines.routine_simple_walk import simple_walk_routine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -16,10 +14,6 @@ async def main() -> None:
 
     async def on_connect(t: Turtle) -> None:
         logging.getLogger("handler").info("turtle connected: %s", t.id)
-        if t.id == 12:
-            asyncio.create_task(simple_walk_routine(t))
-        elif t.id == 11:
-            asyncio.create_task(simple_dig_routine(t))
 
     async def on_disconnect(turtle_id: int) -> None:
         logging.getLogger("handler").info("turtle disconnected: %s", turtle_id)

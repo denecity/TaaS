@@ -12,7 +12,7 @@ Server-driven control plane for ComputerCraft turtles (and future CC computers).
 - Python 3.11+ on Linux
 - Create venv and install deps (pip/requirements as in project)
 - Run:
-  - `make frontend` or `python -m uvicorn app:app --host 0.0.0.0 --port 8000`
+  - `make frontend` or `python -m uvicorn main:app --host 0.0.0.0 --port 8000`
   - CC gateway server listens on its configured WS port (see logs)
 
 Open http://localhost:8000
