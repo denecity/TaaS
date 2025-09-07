@@ -106,6 +106,14 @@ function headingToText(h) {
     return '—';
 }
 
+function cleanRoutineName(name) {
+    if (!name || name === '—') return name;
+    return name
+        .replace(/^routine_/, '')  // Remove 'routine_' prefix
+        .replace(/_/g, ' ')        // Replace underscores with spaces
+        .replace(/\b\w/g, l => l.toUpperCase()); // Capitalize first letter of each word
+}
+
 function renderTurtle(t) {
     const statusClass = t.alive ? 'connected' : 'disconnected';
     const fuel = t.fuel_level ?? '—';
@@ -113,7 +121,7 @@ function renderTurtle(t) {
     const coords = t.coords ?? {};
     const heading = (t.heading ?? null);
     const btnLabel = currentButtonLabelFromAssignment(t.assignment);
-    const routineName = (t.assignment && t.assignment.routine) ? t.assignment.routine : '—';
+    const routineName = (t.assignment && t.assignment.routine) ? cleanRoutineName(t.assignment.routine) : '—';
     const titleText = t.label ? `${t.label} (#${t.id})` : `Turtle #${t.id}`;
     return `
     <div class="turtle" data-id="${t.id}">
@@ -175,7 +183,8 @@ function bindItemHandlers(root, routines) {
 
     select.innerHTML = '';
     norm.forEach(r => {
-        const opt = new Option(r.name, r.name);
+        const cleanName = cleanRoutineName(r.name);
+        const opt = new Option(cleanName, r.name);  // Display clean name, but keep original value
         if (r.description) opt.title = r.description;
         opt.dataset.template = r.config_template || '';
         select.append(opt);
@@ -502,7 +511,7 @@ async function bootstrap() {
                     // Update routine name display
                     if (routineEl) {
                         if (data.routine) {
-                            routineEl.textContent = data.routine;
+                            routineEl.textContent = cleanRoutineName(data.routine);
                         } else if (data.type === 'routine_finished' || data.type === 'routine_cancelled' || data.type === 'routine_failed') {
                             routineEl.textContent = '—';
                         }
