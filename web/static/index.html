@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Turtle Control Center</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css" />
+</head>
+
+<body>
+    <div class="app">
+        <aside class="sidebar">
+            <div class="brand">Turtle Control</div>
+            <nav class="nav">
+                <a class="nav-item active" href="#">Dashboard</a>
+            </nav>
+        </aside>
+        <main class="content">
+            <header class="page-header">
+                <h1>All Turtles</h1>
+                <div class="actions">
+                    <span id="connection-status" class="badge">Connecting…</span>
+                </div>
+            </header>
+            <section id="turtles" class="turtle-list"></section>
+        </main>
+    </div>
+    <script src="/static/app.js?v=2" type="module"></script>
+</body>
+
+</html>

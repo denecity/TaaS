@@ -1,0 +1,336 @@
+:root {
+    --bg: #f6f7fb;
+    --panel: #ffffff;
+    --border: #e6e8ef;
+    --text: #1e293b;
+    --muted: #64748b;
+    --brand: #2563eb;
+    --success: #059669;
+    --danger: #dc2626;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+.app {
+    height: 100%;
+}
+
+body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica Neue, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+.app {
+    display: grid;
+    grid-template-columns: 170px 1fr;
+    /* was 280px; slimmer sidebar (~60%) */
+}
+
+.sidebar {
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    padding: 12px;
+    /* tighter padding */
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.brand {
+    font-weight: 700;
+    font-size: 20px;
+    color: var(--brand);
+}
+
+.nav {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.nav-item {
+    color: var(--muted);
+    text-decoration: none;
+    padding: 10px 12px;
+    border-radius: 10px;
+}
+
+.nav-item.active,
+.nav-item:hover {
+    background: #eff6ff;
+    color: var(--brand);
+}
+
+.content {
+    padding: 24px 32px;
+}
+
+.page-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+}
+
+.page-header h1 {
+    margin: 0;
+    font-size: 22px;
+}
+
+.badge {
+    background: #eef2ff;
+    color: #3730a3;
+    padding: 6px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+}
+
+.turtle-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.turtle {
+    display: grid;
+    grid-template-columns: 72px 200px 120px minmax(300px, 1fr) 160px 44px;
+    /* avatar | meta | coords | console | controls | expand */
+    gap: 4px;
+    /* reduce inter-column spacing ~200% vs previous (12px -> 4px) */
+    align-items: center;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 10px 12px;
+    /* slightly tighter padding */
+    box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.turtle .avatar {
+    width: 56px;
+    height: 56px;
+    border-radius: 12px;
+    border: 1px solid #c7d2fe;
+    background: linear-gradient(135deg, #e0e7ff, #f5f3ff);
+    display: grid;
+    place-items: center;
+    color: #4f46e5;
+    font-weight: 700;
+}
+
+.turtle .meta {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+.coords-col {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.coords-col .coord-line {
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.turtle .title {
+    font-weight: 600;
+}
+
+.turtle .status.connected {
+    color: var(--success);
+    font-size: 14px;
+}
+
+.turtle .status.disconnected {
+    color: var(--danger);
+    font-size: 14px;
+}
+
+.turtle .fuel {
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.turtle .routine-label {
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.console {
+    width: 100%;
+    min-width: 300px;
+    height: 88px;
+    background: #f8fafc;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 12px;
+    overflow: auto;
+    color: #0f172a;
+}
+
+.controls {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.btn {
+    border: 0;
+    border-radius: 8px;
+    padding: 8px 10px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.btn.primary {
+    background: var(--brand);
+    color: white;
+}
+
+.btn.primary:hover {
+    filter: brightness(0.95);
+}
+
+.btn.stop {
+    background: var(--danger);
+    color: white;
+}
+
+.btn.restart {
+    background: #334155;
+    color: white;
+}
+
+.uptime {
+    color: var(--muted);
+    font-size: 13px;
+}
+
+/* Left-aligned by default; ensure the expand is right-aligned */
+.expand {
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    color: var(--muted);
+    transition: transform .18s ease, filter .12s ease, background .12s ease;
+    font-size: 32px;
+    width: 44px;
+    height: 44px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: #f1f5f9;
+    grid-column: -1;
+    /* last column */
+    grid-row: 1;
+    /* first row */
+    justify-self: end;
+    /* right align within last column */
+}
+
+.expand:hover {
+    color: var(--text);
+    filter: brightness(0.98);
+    background: #e2e8f0;
+}
+
+.details {
+    grid-column: 1 / -1;
+    background: #f8fafc;
+    border: 1px dashed var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    /* slightly larger padding */
+    display: none;
+}
+
+.details.open {
+    display: block;
+    transform-origin: top left;
+    /* expand by ~150% */
+}
+
+.expand.rot {
+    transform: rotate(180deg);
+}
+
+.detail-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    /* routine editor | inventory */
+    gap: 16px;
+}
+
+.detail-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.detail-section h4 {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+
+.select,
+.textarea {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: white;
+    font: inherit;
+    font-size: 14px;
+}
+
+.textarea {
+    height: 300px;
+    resize: vertical;
+}
+
+.inventory {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+}
+
+.slot {
+    width: 160px;
+    /* 250% of prior 40px width (approx effect) */
+    height: 80px;
+    /* 200% of prior 40px height */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: white;
+    color: var(--muted);
+    padding: 6px;
+}
+
+.slot-count {
+    font-weight: 700;
+    color: #0f172a;
+}
+
+.slot-name {
+    font-size: 12px;
+    text-align: center;
+}
