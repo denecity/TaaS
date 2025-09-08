@@ -2,7 +2,8 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import Any, Dict, Optional
+from functools import wraps
+from typing import Any, Dict, Optional, Tuple
 
 import websockets
 
@@ -133,11 +134,10 @@ class Turtle:
                 
                 # Label collection (from firmware if available)
                 try:
-                    label = await sess.eval("get_name_tag()")
-                    if label and isinstance(label, (str, int, float)):
-                        label_str = str(label)
-                        sess._apply_label(label_str)
-                        self._logger.info(f"Retrieved and stored label from firmware: {repr(label_str)}")
+                    label = await sess.get_label()
+                    if label:
+                        sess._apply_label(label)
+                        self._logger.info(f"Retrieved and stored label from firmware: {repr(label)}")
                 except Exception as e:
                     self._logger.debug(f"No label available from firmware: {e}")
                 
@@ -231,7 +231,24 @@ class Turtle:
         def turtle(self) -> "Turtle":
             return self._turtle
 
+        # Decorator for logging turtle operations with context
+        def _log_turtle_operation(func):
+            @wraps(func)
+            async def wrapper(self, *args, **kwargs):
+                operation_name = func.__name__
+                self._turtle._logger.info(f"Turtle {self._turtle.id}: {operation_name}")
+                
+                result = await func(self, *args, **kwargs)
+                
+                # Log the return value if there is one
+                if result is not None:
+                    self._turtle._logger.info(f"Turtle {self._turtle.id}: {operation_name} → {result}")
+                
+                return result
+            return wrapper
+        
         # Acquire the session lock when entering the context
+        
         async def __aenter__(self) -> "Turtle._Session":
             await self._lock_cm.acquire()
             self._entered = True
@@ -253,21 +270,21 @@ class Turtle:
             payload = {"id": req_id, "command": line}
             fut: asyncio.Future = asyncio.get_running_loop().create_future()
             self._turtle._pending[req_id] = fut
-            self._turtle._logger.info("session: send id=%s cmd=%s", req_id, line)
-            await self._turtle._ws.send(json.dumps(payload))
             try:
+                await self._turtle._ws.send(json.dumps(payload))
                 resp = await asyncio.wait_for(fut, timeout=30)
-                self._turtle._logger.info("session: recv id=%s resp=%s", req_id, resp)
+                return resp
+            except Exception as e:
+                self._turtle._logger.error("session: send failed id=%s cmd=%s error=%s", req_id, line, e)
+                raise
             finally:
                 self._turtle._pending.pop(req_id, None)
-            return resp
 
         # Basic helpers (you can extend these later)
         # Send a command and return whether it succeeded
         async def send_command(self, line: str) -> bool:
             resp = await self._send(line)
             ok = bool(resp.get("ok"))
-            self._turtle._logger.info("session: send_command ok=%s", ok)
             return ok
 
         # Evaluate a Lua expression and return the result
@@ -276,7 +293,6 @@ class Turtle:
             if not resp.get("ok"):
                 self._turtle._logger.error("session: eval failed: %s", resp)
                 raise RuntimeError("eval failed")
-            self._turtle._logger.info("session: eval value=%s", resp.get("value"))
             return resp.get("value")
 
         # Get the current state from the database
@@ -327,9 +343,78 @@ class Turtle:
                     self._turtle._logger.debug(f"Updated inventory for turtle {self._turtle.id}")
             except Exception as e:
                 self._turtle._logger.warning(f"Failed to update inventory: {e}")
+        
+        
+        def _evaluate_inspect_return(self, res: Dict[str, Any]) -> Tuple[bool, Any]:
+            """Parse inspect result into clean format with predefined tag fields."""
+            # Initialize with tags we care about
+            result = {
+                "name": "unknown",
+                "c:ores": False,
+                "minecraft:mineable/pickaxe": False,
+            }
+            
+            ok = bool(res.get('ok'))
+            if not ok:
+                return False, None
+                
+            raw_data = res.get('data')
+            if not raw_data:
+                return False, None
+                
+            # Set the name
+            result["name"] = raw_data.get("name", "unknown")
+            
+            # Fill in tags that exist
+            raw_tags = raw_data.get("tags", {})
+            for tag in result.keys():
+                if tag == "name":
+                    continue
+                if tag in raw_tags:
+                    result[tag] = True
+                    
+            return ok, result
+
+        def _evaluate_inventory_returns(self, res: Dict[str, Any]) -> Tuple[bool, Any]:
+            """Parse inventory result into clean format with predefined tag fields."""
+            # Initialize with tags we care about for inventory items
+            result = {
+                "name": "unknown",
+                "displayName": "Unknown",
+                "count": 0,
+                "c:ores": False,
+                "c:gems": False,
+                "c:stones": False,
+                "c:chests": False,
+                "minecraft:building_blocks": False,
+            }
+            
+            ok = bool(res.get('ok'))
+            if not ok:
+                return False, None
+                
+            raw_data = res.get('data')
+            if not raw_data:
+                return False, None
+                
+            # Set the name, displayName, and count
+            result["name"] = raw_data.get("name", "unknown")
+            result["displayName"] = raw_data.get("displayName", "Unknown")
+            result["count"] = raw_data.get("count", 0)
+            
+            # Fill in tags that exist
+            raw_tags = raw_data.get("tags", {})
+            for tag in result.keys():
+                if tag in ["name", "displayName", "count"]:
+                    continue
+                if tag in raw_tags:
+                    result[tag] = True
+                    
+            return ok, result
 
         # Minimal turtle methods
         # Move the turtle forward one block
+        @_log_turtle_operation
         async def forward(self) -> bool:
             # turtle.forward() returns true on success, false on failure, or [false, reason] on failure with reason
             result = await self.eval("turtle.forward()")
@@ -356,6 +441,7 @@ class Turtle:
                     self._apply_movement(dz=-1, fuel_cost=1)
             return success
 
+        @_log_turtle_operation
         async def back(self) -> bool:
             # turtle.back() returns true on success, false on failure, or [false, reason] on failure with reason
             result = await self.eval("turtle.back()")
@@ -381,6 +467,7 @@ class Turtle:
                     self._apply_movement(dz=1, fuel_cost=1)
             return success
 
+        @_log_turtle_operation
         async def up(self) -> bool:
             # turtle.up() returns true on success, false on failure, or [false, reason] on failure with reason
             result = await self.eval("turtle.up()")
@@ -397,6 +484,7 @@ class Turtle:
                 self._apply_movement(dy=1, fuel_cost=1)
             return success
 
+        @_log_turtle_operation
         async def down(self) -> bool:
             # turtle.down() returns true on success, false on failure, or [false, reason] on failure with reason
             result = await self.eval("turtle.down()")
@@ -413,92 +501,127 @@ class Turtle:
                 self._apply_movement(dy=-1, fuel_cost=1)
             return success
 
+        @_log_turtle_operation
         async def turn_left(self) -> bool:
             ok = await self.send_command("turtle.turnLeft()")
             if ok:
                 self._apply_heading(delta=-1)
             return ok
 
+        @_log_turtle_operation
         async def turn_right(self) -> bool:
             ok = await self.send_command("turtle.turnRight()")
             if ok:
                 self._apply_heading(delta=1)
             return ok
 
+        @_log_turtle_operation
         async def dig(self) -> bool:
             return await self.send_command("turtle.dig()")
 
+        @_log_turtle_operation
         async def place(self) -> bool:
             return await self.send_command("turtle.place()")
 
+        @_log_turtle_operation
         async def select(self, slot: int) -> bool:
             return await self.send_command(f"turtle.select({int(slot)})")
 
+        @_log_turtle_operation
         async def dig_up(self) -> bool:
             return await self.send_command("turtle.digUp()")
 
+        @_log_turtle_operation
         async def dig_down(self) -> bool:
             return await self.send_command("turtle.digDown()")
 
+        @_log_turtle_operation
         async def place_up(self) -> bool:
             return await self.send_command("turtle.placeUp()")
 
+        @_log_turtle_operation
         async def place_down(self) -> bool:
             return await self.send_command("turtle.placeDown()")
 
+        @_log_turtle_operation
         async def suck(self) -> bool:
             return await self.send_command("turtle.suck()")
 
+        @_log_turtle_operation
         async def suck_up(self) -> bool:
             return await self.send_command("turtle.suckUp()")
 
+        @_log_turtle_operation
         async def suck_down(self) -> bool:
             return await self.send_command("turtle.suckDown()")
 
+        @_log_turtle_operation
         async def drop(self, count: int | None = None) -> bool:
             return await self.send_command(f"turtle.drop({int(count)})" if count is not None else "turtle.drop()")
 
+        @_log_turtle_operation
         async def drop_up(self, count: int | None = None) -> bool:
             return await self.send_command(f"turtle.dropUp({int(count)})" if count is not None else "turtle.dropUp()")
 
+        @_log_turtle_operation
         async def drop_down(self, count: int | None = None) -> bool:
             return await self.send_command(f"turtle.dropDown({int(count)})" if count is not None else "turtle.dropDown()")
 
+        @_log_turtle_operation
         async def get_selected_slot(self) -> int:
             return await self.eval("turtle.getSelectedSlot()")
 
+        @_log_turtle_operation
         async def get_item_count(self) -> int:
             return await self.eval("turtle.getItemCount()")
 
+        @_log_turtle_operation
         async def get_item_space(self) -> int:
             return await self.eval("turtle.getItemSpace()")
 
+        @_log_turtle_operation
         async def get_item_detail(self) -> Any:
-            return await self.eval("turtle.getItemDetail()")
+            result = await self.eval("turtle.getItemDetail()")
+            # Process the single item result
+            if result:
+                # Wrap the result in the expected response format
+                item_response = {"ok": True, "data": result}
+                ok, processed_item = self._evaluate_inventory_returns(item_response)
+                if ok and processed_item:
+                    return processed_item
+            return result
 
+        @_log_turtle_operation
         async def compare(self) -> bool:
             return await self.send_command("turtle.compare()")
 
+        @_log_turtle_operation
         async def compare_up(self) -> bool:
             return await self.send_command("turtle.compareUp()")
 
+        @_log_turtle_operation
         async def compare_down(self) -> bool:
             return await self.send_command("turtle.compareDown()")
 
+        @_log_turtle_operation
         async def compare_to(self, slot: int) -> bool:
             return await self.send_command(f"turtle.compareTo({int(slot)})")
 
+        @_log_turtle_operation
         async def transfer_to(self, slot: int, count: int | None = None) -> bool:
             if count is None:
                 return await self.send_command(f"turtle.transferTo({int(slot)})")
             return await self.send_command(f"turtle.transferTo({int(slot)},{int(count)})")
-        
+
+        @_log_turtle_operation        
         async def get_fuel_level(self) -> Any:
             return await self.eval("turtle.getFuelLevel()")
 
+        @_log_turtle_operation
         async def get_fuel_limit(self) -> int:
             return await self.eval("turtle.getFuelLimit()")
 
+        @_log_turtle_operation
         async def refuel(self, count: int) -> bool:
             # turtle.refuel() returns true on success, false on failure, or (false, reason) on failure with reason
             result = await self.eval(f"turtle.refuel({int(count)})")
@@ -515,51 +638,65 @@ class Turtle:
             
             return success
 
+        @_log_turtle_operation
         async def equip_left(self) -> bool:
             return await self.send_command("turtle.equipLeft()")
 
+        @_log_turtle_operation
         async def equip_right(self) -> bool:
             return await self.send_command("turtle.equipRight()")
 
+        @_log_turtle_operation
         async def inspect(self) -> Any:
             res = await self.eval("(function() local ok,data=turtle.inspect(); return {ok=ok, data=data} end)()")
-            try:
-                return bool(res.get('ok')), res.get('data')
-            except Exception:
-                return False, None
+            return self._evaluate_inspect_return(res)
 
+        @_log_turtle_operation
         async def inspect_up(self) -> Any:
             res = await self.eval("(function() local ok,data=turtle.inspectUp(); return {ok=ok, data=data} end)()")
-            try:
-                return bool(res.get('ok')), res.get('data')
-            except Exception:
-                return False, None
+            return self._evaluate_inspect_return(res)
 
+        @_log_turtle_operation
         async def inspect_down(self) -> Any:
             res = await self.eval("(function() local ok,data=turtle.inspectDown(); return {ok=ok, data=data} end)()")
-            try:
-                return bool(res.get('ok')), res.get('data')
-            except Exception:
-                return False, None
-            
+            return self._evaluate_inspect_return(res)
+
+        @_log_turtle_operation            
         async def get_location(self) -> Any:
             return await self.eval("gps.locate()")
 
+        @_log_turtle_operation
         async def get_inventory_details(self) -> Any:
-            """Get detailed inventory information from the turtle.
-            
-            Uses the firmware helper get_inventory_details() if available,
-            otherwise falls back to basic turtle inventory methods.
-            """
             try:
                 # Try firmware helper first
                 inventory = await self.eval("get_inventory_details()")
-                self._apply_inventory(inventory)
-                return inventory
+                # Process each item in the inventory list
+                processed_inventory = []
+                for item in inventory:
+                    # Wrap each item in the expected response format
+                    item_response = {"ok": True, "data": item}
+                    ok, processed_item = self._evaluate_inventory_returns(item_response)
+                    if ok and processed_item:
+                        processed_inventory.append(processed_item)
+                
+                # Apply the cleaned inventory data to the database
+                self._apply_inventory(processed_inventory)
+                return processed_inventory
             except Exception as e:
                 self._turtle._logger.warning(f"Failed to get inventory details: {e}")
                 return None
 
+        @_log_turtle_operation            
+        async def get_label(self) -> Optional[str]:
+            try:
+                label = await self.eval("get_name_tag()")
+                if label and isinstance(label, (str, int, float)):
+                    return str(label)
+                return None
+            except Exception as e:
+                return None
+
+        @_log_turtle_operation
         async def set_label(self, label: str) -> bool:
             # Escape quotes for safe embedding in Lua string
             escaped = label.replace("\\", "\\\\").replace('"', '\\"')

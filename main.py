@@ -161,7 +161,7 @@ async def lifespan(app: FastAPI):
         Any process that modifies turtle state in the database will automatically
         trigger frontend updates via this callback.
         """
-        logger.info("Database change detected for turtle %d, publishing state_updated event", turtle_id)
+        logger.info("DB change detected (turtle %d), publishing state_updated event", turtle_id)
         await publish({
             "type": "state_updated", 
             "turtle_id": turtle_id, 
@@ -344,11 +344,14 @@ async def execute_routine(tid: int, body: Dict[str, Any]):
         """Wrapper task that executes the routine and sends lifecycle events."""
         try:
             await publish_routine_event("routine_started", tid, name)
+            logger.info("Starting routine '%s' for turtle %d with config: %s", name, tid, cfg_parsed)
             await routine.run(t, cfg_parsed)
             assignments[tid]["status"] = "finished"
+            logger.info("Routine '%s' completed successfully for turtle %d", name, tid)
             await publish_routine_event("routine_finished", tid, name)
         except asyncio.CancelledError:
             assignments[tid]["status"] = "aborted"
+            logger.info("Routine '%s' aborted for turtle %d", name, tid)
             await publish_routine_event("routine_aborted", tid, name)
             raise
         except Exception as e:
@@ -415,14 +418,11 @@ def build_turtle_summary(tid: int) -> Dict[str, Any]:
 # APP: Broadcast events to all connected WebSocket clients
 async def publish(event: Dict[str, Any]) -> None:
     """Broadcast an event to all connected WebSocket subscribers.
-
     Parameters
     - event: JSON-serializable payload.
-
     Notes
     - Removes dead subscribers on send failures.
-    - Used by lifecycle hooks, routine execution, and state updates.
-    """
+    - Used by lifecycle hooks, routine execution, and state updates."""
     try:
         dead = []
         for ws in list(event_subscribers):
@@ -446,12 +446,10 @@ async def publish(event: Dict[str, Any]) -> None:
 @app.get("/turtles")
 def list_turtles():
     """List all known turtles with summarized state.
-
     Source of truth
     - Union of ids from `db_state.list_all_ids()`, currently connected turtles
       from `server.list_turtles()`, and an in-memory set of `seen_turtles`.
-    - Each turtle is shaped via `build_turtle_summary`.
-    """
+    - Each turtle is shaped via `build_turtle_summary`."""
     logger.debug("GET /turtles")
     # Use DB-known turtles plus currently connected
     try:
@@ -467,10 +465,7 @@ def list_turtles():
 @app.get("/turtles/{tid}")
 def turtle_status(tid: int):
     """Return liveness and assignment status for a connected turtle.
-
-    Raises
-    - 404 if the turtle is not currently connected per `server.get_turtle()`.
-    """
+    Raises 404 if the turtle is not currently connected per `server.get_turtle()`."""
     logger.debug("GET /turtles/%d", tid)
     t = server.get_turtle(tid)
     if not t:
@@ -482,9 +477,7 @@ def turtle_status(tid: int):
 @app.get("/routines")
 def list_routines():
     """Enumerate registered routines from the `routines` package.
-
-    Returns name, description, and a config template for each routine.
-    """
+    Returns name, description, and a config template for each routine."""
     logger.debug("GET /routines -> %d routines", len(routine_registry))
     out = []
     for name, routine in routine_registry.items():
@@ -500,13 +493,10 @@ def list_routines():
 @app.websocket("/events")
 async def events(ws: WebSocket):
     """WebSocket endpoint that streams server logs and state/routine events.
-
     Protocol
     - Server only sends push events; any client text messages are treated as
         keep-alives and ignored.
-    - See callers of `publish()` for event shapes.
-    """
-    
+    - See callers of `publish()` for event shapes."""
     logger.info("/events: client connecting")
     await ws.accept()
     event_subscribers.add(ws)
