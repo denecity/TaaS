@@ -328,11 +328,19 @@ function updateTurtleData(turtles) {
             }
         }
 
-        // Update inventory only if details panel is not expanded (to avoid focus issues)
-        const details = item.querySelector('.details');
-        if (!details || !details.classList.contains('open')) {
-            const invEl = item.querySelector('.inventory');
-            if (invEl) invEl.innerHTML = inventoryGrid(t.inventory);
+        // Update inventory - always update but avoid disrupting focused elements
+        const invEl = item.querySelector('.inventory');
+        if (invEl) {
+            // Only skip update if user is actively interacting with input fields in the details
+            const details = item.querySelector('.details');
+            const hasActiveInput = details && details.contains(document.activeElement) &&
+                (document.activeElement.tagName === 'INPUT' ||
+                    document.activeElement.tagName === 'TEXTAREA' ||
+                    document.activeElement.tagName === 'SELECT');
+
+            if (!hasActiveInput) {
+                invEl.innerHTML = inventoryGrid(t.inventory);
+            }
         }
 
         // Update last seen

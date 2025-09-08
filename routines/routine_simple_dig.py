@@ -19,36 +19,18 @@ iterations: 100
         # Any additional routine-specific logging can be done here.
         logger = logging.getLogger("routine.simple_dig")
         logger.info("Turtle %d: Starting SimpleDigRoutine with config: %s", session._turtle.id, config)
-        iterations = 100
-        try:
-            if isinstance(config, dict):
-                iterations = int(config.get("iterations", iterations))
-        except Exception:
-            pass
-        for _ in range(iterations):
-            await self.select(1)
-            await self.dig()
-            await self.forward()
-            await self.turn_right()
-            await self.turn_right()
-            await self.place()
-            await self.turn_right()
-            await self.turn_right()
 
-            await self.dig()
-            await self.forward()
-            await self.turn_right()
-            await self.turn_right()
-            await self.place()
-            await self.turn_right()
-            await self.turn_right()
+        await self.session.select(1)
+        await self.session.get_item_count()
+        await self.session.get_item_detail()
 
-            await self.turn_left()
+        await self.session.place()
 
-            fuel_level, error_message = await self.get_fuel_level()
-            if fuel_level is not None:
-                logger.info(f"Turtle {session._turtle.id}, fuel level: {fuel_level}")
-            else:
-                logger.warning(f"Turtle {session._turtle.id}, failed to get fuel level: {error_message or 'Unknown error'}")
+        for slot in range(1, 17):
+            if slot == 1:
+                continue
+            await self.session.select(slot)
+            await self.session.drop()
 
+        return
 
