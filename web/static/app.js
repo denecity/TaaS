@@ -92,10 +92,10 @@ function hydrateConsoleFromState(id) {
 }
 
 function currentButtonLabelFromAssignment(assign) {
-    if (!assign || !assign.status) return 'Start';
-    if (assign.status === 'running') return 'Stop';
-    if (assign.status === 'paused') return 'Continue';
-    return 'Start';
+    if (!assign || !assign.status) return 'Execute';
+    if (assign.status === 'running') return 'Abort';
+    // For any other status (paused, finished, failed), we restart from beginning
+    return 'Execute';
 }
 
 function headingToText(h) {
@@ -141,7 +141,6 @@ function renderTurtle(t) {
       <div class="console" aria-label="console"></div>
       <div class="controls">
         <button class="btn primary toggle">${btnLabel}</button>
-        <button class="btn stop">Stop</button>
       </div>
       <div class="uptime" data-since="${t.last_seen_ms || 0}">${sinceString(t.last_seen_ms || 0)}</div>
       <div class="expand" title="Expand">▾</div>
@@ -218,60 +217,41 @@ function bindItemHandlers(root, routines) {
         const id = root.dataset.id;
         const btn = e.currentTarget;
         const label = btn.textContent.trim();
-        const wantsStop = label.toLowerCase() === 'stop';
+        const isRunning = label.toLowerCase() === 'abort';
         const cfg = root.querySelector('.config');
         const select = root.querySelector('.routine');
         btn.disabled = true;
         try {
-            if (wantsStop) {
-                dbg('action: stop', id);
-                const r = await fetch(`/turtles/${id}/cancel`, { method: 'POST' });
-                dbg('resp: cancel', r.status);
+            if (isRunning) {
+                // Abort the currently running routine
+                dbg('action: abort', id);
+                const r = await fetch(`/turtles/${id}/abort`, { method: 'POST' });
+                dbg('resp: abort', r.status);
                 if (r.ok) {
-                    btn.textContent = 'Start';
-                    turtleConsole(id).push('[client] requested stop');
+                    btn.textContent = 'Execute';
+                    turtleConsole(id).push('[client] routine aborted');
                 } else {
-                    turtleConsole(id).push(`[client] stop failed: HTTP ${r.status}`);
+                    turtleConsole(id).push(`[client] abort failed: HTTP ${r.status}`);
                 }
             } else {
-                let r;
-                if (label.toLowerCase() === 'continue') {
-                    dbg('action: continue', id);
-                    r = await fetch(`/turtles/${id}/continue`, { method: 'POST' });
-                    dbg('resp: continue', r.status);
-                    if (!r.ok) {
-                        const routineName = select.value || (norm[0]?.name || '');
-                        dbg('fallback start routine', routineName);
-                        if (!routineName) {
-                            turtleConsole(id).push('[client] no routines available to run');
-                        } else {
-                            r = await fetch(`/turtles/${id}/run`, {
-                                method: 'POST',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ routine: routineName, config: cfg?.value || '' }),
-                            });
-                            dbg('resp: run (fallback)', r.status);
-                        }
-                    }
-                } else { // Start
-                    const routineName = select.value || (norm[0]?.name || '');
-                    dbg('action: start', id, routineName);
-                    if (!routineName) {
-                        turtleConsole(id).push('[client] no routines available to run');
+                // Execute/start a routine (always starts from beginning)
+                const routineName = select.value || (norm[0]?.name || '');
+                dbg('action: execute', id, routineName);
+                if (!routineName) {
+                    turtleConsole(id).push('[client] no routines available to run');
+                } else {
+                    const r = await fetch(`/turtles/${id}/execute`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ routine: routineName, config: cfg?.value || '' }),
+                    });
+                    dbg('resp: execute', r.status);
+                    if (r.ok) {
+                        btn.textContent = 'Abort';
+                        turtleConsole(id).push('[client] routine started');
                     } else {
-                        r = await fetch(`/turtles/${id}/run`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ routine: routineName, config: cfg?.value || '' }),
-                        });
-                        dbg('resp: run', r.status);
+                        turtleConsole(id).push(`[client] start failed: HTTP ${r.status}`);
                     }
-                }
-                if (r && r.ok) {
-                    btn.textContent = 'Stop';
-                    turtleConsole(id).push('[client] requested continue/start');
-                } else if (r && !r.ok) {
-                    turtleConsole(id).push(`[client] run/continue failed: HTTP ${r.status}`);
                 }
             }
         } catch (err) {
@@ -279,17 +259,6 @@ function bindItemHandlers(root, routines) {
             turtleConsole(id).push(`[client] error: ${err}`);
         } finally {
             btn.disabled = false;
-        }
-    });
-    root.querySelector('.stop').addEventListener('click', async () => {
-        const id = root.dataset.id;
-        dbg('action: stop', id);
-        const r = await fetch(`/turtles/${id}/cancel`, { method: 'POST' });
-        dbg('resp: stop', r.status);
-        if (r.ok) {
-            turtleConsole(id).push('[client] routine stopped');
-        } else {
-            turtleConsole(id).push(`[client] stop failed: HTTP ${r.status}`);
         }
     });
 }
@@ -500,11 +469,9 @@ async function bootstrap() {
 
                     if (toggle) {
                         if (data.type === 'routine_started') {
-                            toggle.textContent = 'Stop';
-                        } else if (data.type === 'routine_paused') {
-                            toggle.textContent = 'Continue';
-                        } else if (data.type === 'routine_finished' || data.type === 'routine_cancelled' || data.type === 'routine_failed') {
-                            toggle.textContent = 'Start';
+                            toggle.textContent = 'Abort';
+                        } else if (data.type === 'routine_aborted' || data.type === 'routine_finished' || data.type === 'routine_failed') {
+                            toggle.textContent = 'Execute';
                         }
                     }
 
@@ -512,7 +479,7 @@ async function bootstrap() {
                     if (routineEl) {
                         if (data.routine) {
                             routineEl.textContent = cleanRoutineName(data.routine);
-                        } else if (data.type === 'routine_finished' || data.type === 'routine_cancelled' || data.type === 'routine_failed') {
+                        } else if (data.type === 'routine_aborted' || data.type === 'routine_finished' || data.type === 'routine_failed') {
                             routineEl.textContent = '—';
                         }
                     }

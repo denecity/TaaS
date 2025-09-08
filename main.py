@@ -13,7 +13,7 @@ Key project dependencies and collaborators:
 - `db_state` persists last-seen timestamps and per-turtle state such as fuel,
     inventory, coordinates, heading, and label in `data/turtles.db`.
 - `routines` package (`routines/*.py`) registers runnable behaviors that can be
-    triggered per turtle via the `/turtles/{tid}/run` endpoint.
+    triggered per turtle via the `/turtles/{tid}/execute` endpoint.
 
 External libraries:
 - FastAPI/Starlette for HTTP & WebSocket handling.
@@ -283,8 +283,8 @@ async def on_turtle_disconnect(tid: int) -> None:
 ###############################
 
 # SERVER: REST endpoint to start executing a routine on a specific turtle
-@app.post("/turtles/{tid}/run")
-async def run_routine(tid: int, body: Dict[str, Any]):
+@app.post("/turtles/{tid}/execute")
+async def execute_routine(tid: int, body: Dict[str, Any]):
     """Start a routine on a turtle.
 
     Body
@@ -294,13 +294,13 @@ async def run_routine(tid: int, body: Dict[str, Any]):
     Behavior
     - Cancels a previous routine for the same turtle if still running.
     - Spawns an async task to run `routine.run(turtle, config)`.
-    - Emits `routine_started`/`finished`/`paused`/`failed` events via WebSocket.
+    - Emits `routine_started`/`finished`/`aborted`/`failed` events via WebSocket.
 
     Dependencies
     - Uses `routines/*` implementations and `turtle_handler.Turtle` session.
     - Optional YAML parsing via `PyYAML`.
     """
-    logger.info("POST /turtles/%d/run body=%s", tid, body)
+    logger.info("POST /turtles/%d/execute body=%s", tid, body)
     name = body.get("routine")
     routine = routine_registry.get(name)
     if not routine:
@@ -344,8 +344,8 @@ async def run_routine(tid: int, body: Dict[str, Any]):
             assignments[tid]["status"] = "finished"
             asyncio.create_task(publish({"type": "routine_finished", "turtle_id": tid, "routine": name}))
         except asyncio.CancelledError:
-            assignments[tid]["status"] = "paused"
-            asyncio.create_task(publish({"type": "routine_paused", "turtle_id": tid, "routine": name}))
+            assignments[tid]["status"] = "aborted"
+            asyncio.create_task(publish({"type": "routine_aborted", "turtle_id": tid, "routine": name}))
             raise
         except Exception as e:
             assignments[tid]["status"] = "failed"
@@ -357,17 +357,17 @@ async def run_routine(tid: int, body: Dict[str, Any]):
     return {"accepted": True}
 
 
-# SERVER: REST endpoint to cancel a currently running turtle routine
-@app.post("/turtles/{tid}/cancel")
-async def cancel_routine(tid: int):
+# SERVER: REST endpoint to abort a currently running turtle routine
+@app.post("/turtles/{tid}/abort")
+async def abort_routine(tid: int):
     
-    """Cancel a running routine for the given turtle, if any."""
+    """Abort a running routine for the given turtle, if any."""
     
-    logger.info("POST /turtles/%d/cancel", tid)
+    logger.info("POST /turtles/%d/abort", tid)
     if tid in running_tasks and not running_tasks[tid].done():
         running_tasks[tid].cancel()
-        return {"cancelled": True}
-    return {"cancelled": False}
+        return {"aborted": True}
+    return {"aborted": False}
 
 
 # SERVER: Helper function for parsing turtle inventory data from database storage
@@ -435,6 +435,20 @@ def build_turtle_summary(tid: int) -> Dict[str, Any]:
         }
 
 
+
+
+
+
+
+
+
+
+
+
+###############################
+# APP (frontend)
+###############################
+
 # APP: Broadcast events to all connected WebSocket clients
 async def publish(event: Dict[str, Any]) -> None:
     """Broadcast an event to all connected WebSocket subscribers.
@@ -464,50 +478,6 @@ async def publish(event: Dict[str, Any]) -> None:
             logger.info("publish: removed %d dead subscribers", len(dead))
     except Exception as e:
         logger.error("publish: unexpected error: %s", e)
-
-
-# SERVER: REST endpoint to continue/restart the last routine on a turtle
-@app.post("/turtles/{tid}/continue")
-async def continue_routine(tid: int):
-    
-    """Re-run the most recent routine for a turtle with its last config."""
-    
-    logger.info("POST /turtles/%d/continue", tid)
-    last = assignments.get(tid)
-    if not last or not last.get("routine"):
-        raise HTTPException(404, "no previous routine")
-    return await run_routine(tid, {"routine": last["routine"], "config": last.get("config")})
-
-
-# SERVER: REST endpoint to restart/reboot a turtle (placeholder implementation)
-@app.post("/turtles/{tid}/restart")
-async def restart_turtle(tid: int):
-    
-    """Placeholder endpoint to request a turtle restart.
-
-    Note: Currently a no-op beyond validating connectivity and opening a
-    session. Future implementations could send a reboot command.
-    """
-    
-    logger.info("POST /turtles/%d/restart", tid)
-    t = server.get_turtle(tid)
-    if not t or not t.is_alive():
-        raise HTTPException(404, "turtle not connected")
-    async with t.session() as sess:
-        pass
-    return {"accepted": True}
-
-
-
-
-
-
-
-
-
-###############################
-# APP (frontend)
-###############################
 
 # APP: REST endpoint to list all known turtles with their current status
 @app.get("/turtles")
