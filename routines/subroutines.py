@@ -7,11 +7,14 @@ import backend.db_state as db_state
 logger = logging.getLogger("subroutines")
 
 
-async def mine_ore_vein(self, session: Turtle._Session, config: Any | None) -> None:
+async def mine_ore_vein(turtle, config: dict = None) -> None:
 	"""Flood-fill mine any connected 'ore' vein in 6 directions (includes up/down).
 
 	The turtle will pathfind over already mined cells to the nearest discovered ore,
 	then return to the start and restore heading.
+	
+	Config options:
+	- max_actions: int (default 2000) - maximum actions before stopping
 	"""
 	def is_ore(name: str | None) -> bool:
 		if not name:
@@ -30,12 +33,12 @@ async def mine_ore_vein(self, session: Turtle._Session, config: Any | None) -> N
 
 	async def turn_left_local() -> None:
 		nonlocal dir_idx
-		await self.turn_left()
+		await turtle.turn_left()
 		dir_idx = (dir_idx + 3) % 4
 
 	async def turn_right_local() -> None:
 		nonlocal dir_idx
-		await self.turn_right()
+		await turtle.turn_right()
 		dir_idx = (dir_idx + 1) % 4
 
 	async def face_dir(target_idx: int) -> None:
@@ -51,21 +54,21 @@ async def mine_ore_vein(self, session: Turtle._Session, config: Any | None) -> N
 
 	async def step_forward_local() -> bool:
 		nonlocal pos
-		ok = await self.forward()
+		ok = await turtle.forward()
 		if ok:
 			pos = add_vec(pos, dir_vecs[dir_idx])
 		return ok
 
 	async def step_up_local() -> bool:
 		nonlocal pos
-		ok = await self.up()
+		ok = await turtle.up()
 		if ok:
 			pos = (pos[0], pos[1]+1, pos[2])
 		return ok
 
 	async def step_down_local() -> bool:
 		nonlocal pos
-		ok = await self.down()
+		ok = await turtle.down()
 		if ok:
 			pos = (pos[0], pos[1]-1, pos[2])
 		return ok
@@ -74,7 +77,9 @@ async def mine_ore_vein(self, session: Turtle._Session, config: Any | None) -> N
 	mined: set[tuple[int,int,int]] = {pos}
 	frontier: set[tuple[int,int,int]] = set()
 	inspected: Dict[tuple[int,int,int], str | None] = {}
-	max_actions = int((config or {}).get("max_actions", 2000) if isinstance(config, dict) else 2000)
+	max_actions = 2000
+	if isinstance(config, dict):
+		max_actions = config.get("max_actions", max_actions)
 	actions = 0
 
 	async def refresh_frontier_here() -> None:
@@ -84,7 +89,7 @@ async def mine_ore_vein(self, session: Turtle._Session, config: Any | None) -> N
 			adj = add_vec(pos, dir_vecs[dir_idx])
 			name = inspected.get(adj)
 			if name is None and adj not in inspected:
-				ok, info = await self.inspect()
+				ok, info = await turtle.inspect()
 				name = str(info.get("name")) if ok else None
 				inspected[adj] = name
 			if is_ore(name) and adj not in mined:
@@ -95,14 +100,14 @@ async def mine_ore_vein(self, session: Turtle._Session, config: Any | None) -> N
 		# up
 		adj_u = (pos[0], pos[1]+1, pos[2])
 		if adj_u not in inspected:
-			ok_u, info_u = await session.inspect_up()
+			ok_u, info_u = await turtle.inspect_up()
 			inspected[adj_u] = str(info_u.get("name")) if ok_u else None
 		if is_ore(inspected.get(adj_u)) and adj_u not in mined:
 			frontier.add(adj_u)
 		# down
 		adj_d = (pos[0], pos[1]-1, pos[2])
 		if adj_d not in inspected:
-			ok_d, info_d = await session.inspect_down()
+			ok_d, info_d = await turtle.inspect_down()
 			inspected[adj_d] = str(info_d.get("name")) if ok_d else None
 		if is_ore(inspected.get(adj_d)) and adj_d not in mined:
 			frontier.add(adj_d)
@@ -154,7 +159,7 @@ async def mine_ore_vein(self, session: Turtle._Session, config: Any | None) -> N
 				if best is None or len(path) < len(best[0]):
 					best = (path, tgt, dv, fdir)
 		if best is None:
-			logger.info("Turtle %d: no reachable ore frontier; mined=%d frontier=%d", session._turtle.id, len(mined), len(frontier))
+			turtle.logger.info(f"no reachable ore frontier; mined={len(mined)} frontier={len(frontier)}")
 			break
 		path, target, delta, face_idx = best
 		for step in path[1:]:
@@ -176,12 +181,12 @@ async def mine_ore_vein(self, session: Turtle._Session, config: Any | None) -> N
 			break
 		if face_idx >= 0:
 			await face_dir(face_idx)
-			await self.dig(); await step_forward_local()
+			await turtle.dig(); await step_forward_local()
 		else:
 			if delta == (0,1,0):
-				await self.dig_up(); await step_up_local()
+				await turtle.dig_up(); await step_up_local()
 			elif delta == (0,-1,0):
-				await self.dig_down(); await step_down_local()
+				await turtle.dig_down(); await step_down_local()
 		mined.add(pos)
 		frontier.discard(target)
 		actions += 1
@@ -204,17 +209,22 @@ async def mine_ore_vein(self, session: Turtle._Session, config: Any | None) -> N
 							break
 					await step_forward_local()
 	await face_dir(start_dir_idx)
-	logger.info("Turtle %d: mine_ore_vein complete", session._turtle.id)
+	turtle.logger.info("mine_ore_vein complete")
 
 
-async def move_to_coordinate(turtle, target_x: int, target_y: int, target_z: int) -> None:
+async def move_to_coordinate(turtle, config: dict = None) -> None:
 	"""Move to specified coordinates with simple obstacle-aware pathing.
 	
+	Config expects: {"x": int, "y": int, "z": int}
 	- Lifts to ~y=150 first to reduce collisions
 	- Moves horizontally (x then z) with inspect/dig before each step
 	- Finishes with vertical adjustment to target y
 	- Uses an L1 distance-based step threshold: max(500, 4*L1)
 	"""
+	if not isinstance(config, dict) or not {"x", "y", "z"}.issubset(config.keys()):
+		turtle.logger.error("move_to_coordinate missing x/y/z in config")
+		return
+	
 	# Get current position
 	position = await turtle.get_location()
 	if not position:
@@ -222,12 +232,11 @@ async def move_to_coordinate(turtle, target_x: int, target_y: int, target_z: int
 		return
 	
 	x, y, z = position
-	tx, ty, tz = int(target_x), int(target_y), int(target_z)
+	tx, ty, tz = int(config["x"]), int(config["y"]), int(config["z"])
 	
 	# Get current heading from database
 	def get_state() -> Dict[str, Any]:
 		try:
-			import backend.db_state as db_state
 			return db_state.get_state(turtle.session._turtle.id) or {}
 		except Exception:
 			return {}
@@ -256,13 +265,13 @@ async def move_to_coordinate(turtle, target_x: int, target_y: int, target_z: int
 	async def step_forward_checked() -> bool:
 		nonlocal x, z, steps
 		# Check for block ahead and dig if needed
-		block_ahead = await turtle.inspect()
-		if block_ahead:
+		ok, _info = await turtle.inspect()
+		if ok:
 			await turtle.dig()
 		
 		# Clear headroom before moving
-		block_up = await turtle.inspect_block("up")
-		if block_up:
+		ok_u, _ = await turtle.inspect_up()
+		if ok_u:
 			await turtle.dig_up()
 		
 		# Try to move forward
@@ -271,16 +280,16 @@ async def move_to_coordinate(turtle, target_x: int, target_y: int, target_z: int
 			x += vx; z += vz
 			
 			# Clear headroom after moving
-			block_up2 = await turtle.inspect_block("up")
-			if block_up2:
+			ok_u2, _ = await turtle.inspect_up()
+			if ok_u2:
 				await turtle.dig_up()
 			
 			steps += 1
 			return True
 		
 		# Try to go up to bypass obstacle
-		block_up_bypass = await turtle.inspect_block("up")
-		if block_up_bypass:
+		ok_u_bypass, _ = await turtle.inspect_up()
+		if ok_u_bypass:
 			await turtle.dig_up()
 		
 		if await turtle.up():
@@ -294,8 +303,8 @@ async def move_to_coordinate(turtle, target_x: int, target_y: int, target_z: int
 		
 		# Try side-step: right then left
 		await turtle.turn_right(); heading = (heading + 1) % 4
-		block_side = await turtle.inspect_block("forward")
-		if block_side:
+		ok_side, _ = await turtle.inspect()
+		if ok_side:
 			await turtle.dig()
 		
 		if await turtle.forward():
@@ -309,14 +318,14 @@ async def move_to_coordinate(turtle, target_x: int, target_y: int, target_z: int
 	async def step_vertical(to_up: bool) -> bool:
 		nonlocal y, steps
 		if to_up:
-			block_up = await turtle.inspect_block("up")
-			if block_up:
+			ok_u, _ = await turtle.inspect_up()
+			if ok_u:
 				await turtle.dig_up()
 			ok = await turtle.up()
 			if ok: y += 1
 		else:
-			block_down = await turtle.inspect_block("down")
-			if block_down:
+			ok_d, _ = await turtle.inspect_down()
+			if ok_d:
 				await turtle.dig_down()
 			ok = await turtle.down()
 			if ok: y -= 1
@@ -356,11 +365,10 @@ async def move_to_coordinate(turtle, target_x: int, target_y: int, target_z: int
 		if not await step_vertical(False):
 			break
 
-	turtle.logger.info("move_to_coordinate finished at (%d,%d,%d) target=(%d,%d,%d) steps=%d threshold=%d",
-					  x, y, z, tx, ty, tz, steps, threshold)
+	turtle.logger.info(f"move_to_coordinate finished at ({x},{y},{z}) target=({tx},{ty},{tz}) steps={steps} threshold={threshold}")
 
 
-async def dig_to_coordinate(self, session: Turtle._Session, config: Any | None) -> None:
+async def dig_to_coordinate(turtle, config: dict = None) -> None:
 	"""Move in a straight L1 path to target coordinates, digging blocks ahead.
 
 	Config expects: {"x": int, "y": int, "z": int}.
@@ -368,12 +376,12 @@ async def dig_to_coordinate(self, session: Turtle._Session, config: Any | None) 
 	Order: X, then Z, then Y.
 	"""
 	if not isinstance(config, dict) or not {"x", "y", "z"}.issubset(config.keys()):
-		logger.error("Turtle %d: dig_to_coordinate missing x/y/z in config", session._turtle.id)
+		turtle.logger.error("dig_to_coordinate missing x/y/z in config")
 		return
 
 	def get_state() -> Dict[str, Any]:
 		try:
-			return db_state.get_state(session._turtle.id) or {}
+			return db_state.get_state(turtle.session._turtle.id) or {}
 		except Exception:
 			return {}
 
@@ -391,46 +399,46 @@ async def dig_to_coordinate(self, session: Turtle._Session, config: Any | None) 
 		while heading != target_idx:
 			cw = (target_idx - heading) % 4
 			if cw == 1:
-				await self.turn_right(); heading = (heading + 1) % 4
+				await turtle.turn_right(); heading = (heading + 1) % 4
 			elif cw == 2:
-				await self.turn_right(); await self.turn_right(); heading = (heading + 2) % 4
+				await turtle.turn_right(); await turtle.turn_right(); heading = (heading + 2) % 4
 			else:
-				await self.turn_left(); heading = (heading + 3) % 4
+				await turtle.turn_left(); heading = (heading + 3) % 4
 
 	async def forward_dig_step() -> bool:
 		nonlocal x, z
-		ok, _info = await self.inspect()
+		ok, _info = await turtle.inspect()
 		if ok:
-			await self.dig()
+			await turtle.dig()
 		# clear headroom before moving
-		ok_u, _ = await session.inspect_up()
+		ok_u, _ = await turtle.inspect_up()
 		if ok_u:
-			await self.dig_up()
-		if await self.forward():
+			await turtle.dig_up()
+		if await turtle.forward():
 			vx, _, vz = dir_vecs[heading]
 			x += vx; z += vz
 			# clear headroom after moving
-			ok_u2, _ = await session.inspect_up()
+			ok_u2, _ = await turtle.inspect_up()
 			if ok_u2:
-				await self.dig_up()
+				await turtle.dig_up()
 			return True
 		return False
 
 	async def vertical_step(up: bool) -> bool:
 		nonlocal y
 		if up:
-			ok_u, _ = await session.inspect_up()
+			ok_u, _ = await turtle.inspect_up()
 			if ok_u:
-				await self.dig_up()
-			if await self.up():
+				await turtle.dig_up()
+			if await turtle.up():
 				y += 1
 				return True
 			return False
 		else:
-			ok_d, _ = await session.inspect_down()
+			ok_d, _ = await turtle.inspect_down()
 			if ok_d:
-				await self.dig_down()
-			if await self.down():
+				await turtle.dig_down()
+			if await turtle.down():
 				y -= 1
 				return True
 			return False
@@ -440,7 +448,7 @@ async def dig_to_coordinate(self, session: Turtle._Session, config: Any | None) 
 		dir_idx = 0 if tx > x else 2
 		await face_dir(dir_idx)
 		if not await forward_dig_step():
-			logger.warning("Turtle %d: forward blocked during X traversal; stopping", session._turtle.id)
+			turtle.logger.warning("forward blocked during X traversal; stopping")
 			break
 
 	# Then Z directly
@@ -448,50 +456,23 @@ async def dig_to_coordinate(self, session: Turtle._Session, config: Any | None) 
 		dir_idx = 1 if tz > z else 3
 		await face_dir(dir_idx)
 		if not await forward_dig_step():
-			logger.warning("Turtle %d: forward blocked during Z traversal; stopping", session._turtle.id)
+			turtle.logger.warning("forward blocked during Z traversal; stopping")
 			break
 
 	# Finally adjust Y
 	while y < ty:
 		if not await vertical_step(True):
-			logger.warning("Turtle %d: up blocked during Y ascent; stopping", session._turtle.id)
+			turtle.logger.warning("up blocked during Y ascent; stopping")
 			break
 	while y > ty:
 		if not await vertical_step(False):
-			logger.warning("Turtle %d: down blocked during Y descent; stopping", session._turtle.id)
+			turtle.logger.warning("down blocked during Y descent; stopping")
 			break
 
-	logger.info("Turtle %d: dig_to_coordinate finished at (%d,%d,%d) target=(%d,%d,%d)",
-				 session._turtle.id, x, y, z, tx, ty, tz)
+	turtle.logger.info(f"dig_to_coordinate finished at ({x},{y},{z}) target=({tx},{ty},{tz})")
 
 
-async def update_inventory(self, session: Turtle._Session) -> List[Dict[str, Any]]:
-	"""Fetch inventory details from firmware and store in DB; fallback if needed.
-
-	Returns a list of non-empty slot entries if fallback path is used; otherwise
-	returns an empty list (DB is updated regardless).
-	"""
-	try:
-		inv = await session.eval("get_inventory_details()")
-		import json as _json
-		db_state.set_state(session._turtle.id, inventory_json=_json.dumps(inv))
-		return []
-	except Exception:
-		# Fallback: iterate slots quickly without details
-		items: List[Dict[str, Any]] = []
-		for slot in range(1, 17):
-			try:
-				count, _ = await self.get_item_count(slot)
-				if count and count > 0:
-					items.append({"slot": slot, "count": int(count)})
-			except Exception:
-				pass
-		import json as _json
-		db_state.set_state(session._turtle.id, inventory_json=_json.dumps(items))
-		return items
-
-
-async def dump_to_left_chest(self, session: Turtle._Session, config: Any | None) -> None:
+async def dump_to_left_chest(turtle, config: dict = None) -> None:
 	"""Place a chest to the left and dump all inventory into it (except chests).
 
 	Config options:
@@ -499,50 +480,50 @@ async def dump_to_left_chest(self, session: Turtle._Session, config: Any | None)
 	"""
 	chest_slot = 1
 	if isinstance(config, dict):
-		try:
-			chest_slot = int(config.get("chest_slot", chest_slot))
-		except Exception:
-			pass
+		chest_slot = config.get("chest_slot", chest_slot)
 	chest_slot = max(1, min(16, chest_slot))
 
 	# Ensure chest slot selected and has items
-	await self.select(chest_slot)
-	count = await self.get_item_count(chest_slot)
+	await turtle.select(chest_slot)
+	count = await turtle.get_item_count()
 	if not count or count <= 0:
-		logger.warning("Turtle %d: dump_to_left_chest: no chests in slot %d", session._turtle.id, chest_slot)
+		turtle.logger.warning(f"dump_to_left_chest: no chests in slot {chest_slot}")
 		return
 
 	# Turn left and place chest ahead; dig if blocked
-	logger.info("Turtle %d: dump_to_left_chest", session._turtle.id)
-	await self.turn_left()
-	ok, info = await self.inspect()
+	turtle.logger.info("dump_to_left_chest")
+	await turtle.turn_left()
+	ok, info = await turtle.inspect()
 	if ok:
-		await self.dig()
-	placed, _ = await self.place()
-	await self.dig_up()
-	await self.up()
-	await self.dig()
-	await self.down()
+		await turtle.dig()
+	
+	placed = await turtle.place()
+	await turtle.dig_up()
+	await turtle.up()
+	await turtle.dig()
+	await turtle.down()
+	
 	if not placed:
-		logger.warning("Turtle %d: dump_to_left_chest: failed to place chest", session._turtle.id)
-		await self.turn_right()
+		turtle.logger.warning("dump_to_left_chest: failed to place chest")
+		await turtle.turn_right()
 		return
 
 	# Dump all items except chests slot
 	for slot in range(1, 17):
 		if slot == chest_slot:
 			continue
-		await self.select(slot)
-		await self.drop()
+		await turtle.select(slot)
+		await turtle.drop()
 
 	# Restore heading
-	await self.turn_right()
+	await turtle.turn_right()
 
 
 def get_inventory_dump_subroutine(name: str):
 	"""Return a dumping subroutine function by name."""
 	if name == "dump_to_left_chest":
 		return dump_to_left_chest
+	# Add other dump strategies here as needed
 	return dump_to_left_chest
 
 async def do_something(turtle) -> None:
