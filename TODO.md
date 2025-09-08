@@ -47,11 +47,6 @@
 
 ## 🔮 Future Considerations
 
-### Scalability & Performance
-- [ ] **Multi-server Support**: Distribute turtle management across multiple servers
-- [ ] **Database Optimization**: Connection pooling and query optimization for large turtle fleets
-- [ ] **WebSocket Optimization**: Efficient event batching for high-frequency updates
-
 ### Advanced Features
 - [ ] **Turtle Coordination**: Multi-turtle collaborative routines
 - [ ] **Resource Management**: Shared inventory and fuel management systems

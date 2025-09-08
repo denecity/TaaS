@@ -16,7 +16,6 @@ class Routine(ABC):
     Subclasses should override `perform(session, config)` and implement the
     routine logic using the exclusive turtle session provided.
     """
-
     def __init__(self, name: Optional[str] = None, description: Optional[str] = None, config_template: Optional[str] = None) -> None:
         self.name: str = name or self._default_name()
         self.description: Optional[str] = description

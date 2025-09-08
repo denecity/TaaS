@@ -15,8 +15,11 @@ iterations: 100
         )
 
     async def perform(self, session: Turtle._Session, config: Any | None) -> None:
-        # The logger for routines/base.py will handle command logging.
-        # Any additional routine-specific logging can be done here.
+        iterations = 100
+        if isinstance(config, dict):
+            try: iterations = int(config.get("iterations", iterations))
+            except Exception: pass
+
         logger = logging.getLogger("routine.simple_dig")
         logger.info("Turtle %d: Starting SimpleDigRoutine with config: %s", session._turtle.id, config)
 
