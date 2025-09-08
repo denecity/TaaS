@@ -691,9 +691,18 @@ class Turtle:
                 # Save cleaned inventory to database
                 self._apply_inventory(processed_inventory)
                 
-                # Log clean summary
-                filled_slots = sum(1 for item in processed_inventory.values() if item is not None)
-                self._turtle._logger.info(f"Turtle {self._turtle.id}: get_inventory_details → {filled_slots}/16 slots filled")
+                # Log clean summary with item names and counts
+                items_summary = {}
+                for item in processed_inventory.values():
+                    if item is not None:
+                        name = item.get("name", "unknown")
+                        count = item.get("count", 0)
+                        if name in items_summary:
+                            items_summary[name] += count
+                        else:
+                            items_summary[name] = count
+                
+                self._turtle._logger.info(f"Turtle {self._turtle.id}: get_inventory_details → {items_summary}")
                 
                 return processed_inventory
             except Exception as e:
