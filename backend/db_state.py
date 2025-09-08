@@ -187,6 +187,7 @@ def set_state(
     coords: Optional[Tuple[int, int, int]] = None,
     heading: Optional[int] = None,
     connection_status: Optional[str] = None,
+    label: Optional[str] = None,
 ) -> None:
     conn = _conn()
     cur = conn.cursor()
@@ -203,15 +204,16 @@ def set_state(
                 inventory_json=COALESCE(?, inventory_json),
                 x=COALESCE(?, x), y=COALESCE(?, y), z=COALESCE(?, z),
                 heading=COALESCE(?, heading),
-                connection_status=COALESCE(?, connection_status)
+                connection_status=COALESCE(?, connection_status),
+                label=COALESCE(?, label)
             WHERE turtle_id=?
             """,
-            (fuel_level, inventory_json, x, y, z, heading, connection_status, turtle_id),
+            (fuel_level, inventory_json, x, y, z, heading, connection_status, label, turtle_id),
         )
     else:
         cur.execute(
-            "INSERT INTO turtles(turtle_id, fuel_level, inventory_json, x, y, z, heading, connection_status) VALUES (?,?,?,?,?,?,?,?)",
-            (turtle_id, fuel_level, inventory_json, x, y, z, heading, connection_status or "disconnected"),
+            "INSERT INTO turtles(turtle_id, fuel_level, inventory_json, x, y, z, heading, connection_status, label) VALUES (?,?,?,?,?,?,?,?,?)",
+            (turtle_id, fuel_level, inventory_json, x, y, z, heading, connection_status or "disconnected", label),
         )
     conn.commit()
     conn.close()

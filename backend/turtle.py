@@ -338,11 +338,34 @@ class Turtle:
             heading = (heading + delta) % 4
             db_state.set_state(self._turtle.id, heading=heading)
 
+        # Update the turtle's label in the database
+        def _apply_label(self, label: str) -> None:
+            db_state.set_state(self._turtle.id, label=label)
+
+        # Update the turtle's fuel level in the database by querying current fuel
+        async def _apply_refuel(self) -> None:
+            try:
+                current_fuel = await self.get_fuel_level()
+                if isinstance(current_fuel, (int, float)):
+                    db_state.set_state(self._turtle.id, fuel_level=int(current_fuel))
+            except Exception as e:
+                self._turtle._logger.warning(f"Failed to update fuel level after refuel: {e}")
+
         # Minimal turtle methods
         # Move the turtle forward one block
         async def forward(self) -> bool:
-            ok = await self.send_command("turtle.forward()")
-            if ok:
+            # turtle.forward() returns true on success, false on failure, or [false, reason] on failure with reason
+            result = await self.eval("turtle.forward()")
+            
+            # Handle the different return types from turtle.forward()
+            if isinstance(result, list) and len(result) >= 1:
+                # Result is a tuple/array: [false, reason] or [true]
+                success = bool(result[0])
+            else:
+                # Result is a single boolean
+                success = bool(result)
+            
+            if success:
                 # Move along current heading and subtract fuel
                 st = self._get_db_state()
                 heading = st.get("heading")
@@ -354,11 +377,21 @@ class Turtle:
                     self._apply_movement(dx=-1, fuel_cost=1)
                 elif heading == 3:
                     self._apply_movement(dz=-1, fuel_cost=1)
-            return ok
+            return success
 
         async def back(self) -> bool:
-            ok = await self.send_command("turtle.back()")
-            if ok:
+            # turtle.back() returns true on success, false on failure, or [false, reason] on failure with reason
+            result = await self.eval("turtle.back()")
+            
+            # Handle the different return types from turtle.back()
+            if isinstance(result, list) and len(result) >= 1:
+                # Result is a tuple/array: [false, reason] or [true]
+                success = bool(result[0])
+            else:
+                # Result is a single boolean
+                success = bool(result)
+            
+            if success:
                 st = self._get_db_state()
                 heading = st.get("heading")
                 if heading == 0:
@@ -369,19 +402,39 @@ class Turtle:
                     self._apply_movement(dx=1, fuel_cost=1)
                 elif heading == 3:
                     self._apply_movement(dz=1, fuel_cost=1)
-            return ok
+            return success
 
         async def up(self) -> bool:
-            ok = await self.send_command("turtle.up()")
-            if ok:
+            # turtle.up() returns true on success, false on failure, or [false, reason] on failure with reason
+            result = await self.eval("turtle.up()")
+            
+            # Handle the different return types from turtle.up()
+            if isinstance(result, list) and len(result) >= 1:
+                # Result is a tuple/array: [false, reason] or [true]
+                success = bool(result[0])
+            else:
+                # Result is a single boolean
+                success = bool(result)
+            
+            if success:
                 self._apply_movement(dy=1, fuel_cost=1)
-            return ok
+            return success
 
         async def down(self) -> bool:
-            ok = await self.send_command("turtle.down()")
-            if ok:
+            # turtle.down() returns true on success, false on failure, or [false, reason] on failure with reason
+            result = await self.eval("turtle.down()")
+            
+            # Handle the different return types from turtle.down()
+            if isinstance(result, list) and len(result) >= 1:
+                # Result is a tuple/array: [false, reason] or [true]
+                success = bool(result[0])
+            else:
+                # Result is a single boolean
+                success = bool(result)
+            
+            if success:
                 self._apply_movement(dy=-1, fuel_cost=1)
-            return ok
+            return success
 
         async def turn_left(self) -> bool:
             ok = await self.send_command("turtle.turnLeft()")
@@ -403,9 +456,6 @@ class Turtle:
 
         async def select(self, slot: int) -> bool:
             return await self.send_command(f"turtle.select({int(slot)})")
-
-        async def get_fuel_level(self) -> Any:
-            return await self.eval("turtle.getFuelLevel()")
 
         async def dig_up(self) -> bool:
             return await self.send_command("turtle.digUp()")
@@ -466,14 +516,28 @@ class Turtle:
             if count is None:
                 return await self.send_command(f"turtle.transferTo({int(slot)})")
             return await self.send_command(f"turtle.transferTo({int(slot)},{int(count)})")
+        
+        async def get_fuel_level(self) -> Any:
+            return await self.eval("turtle.getFuelLevel()")
 
         async def get_fuel_limit(self) -> int:
             return await self.eval("turtle.getFuelLimit()")
 
-        async def refuel(self, count: int | None = None) -> bool:
-            if count is None:
-                return await self.send_command("turtle.refuel()")
-            return await self.send_command(f"turtle.refuel({int(count)})")
+        async def refuel(self, count: int) -> bool:
+            # turtle.refuel() returns true on success, false on failure, or (false, reason) on failure with reason
+            result = await self.eval(f"turtle.refuel({int(count)})")
+            # Handle the different return types from turtle.refuel()
+            if isinstance(result, list) and len(result) >= 1:
+                # Result is a tuple/array: [false, reason] or [true]
+                success = bool(result[0])
+            else:
+                # Result is a single boolean
+                success = bool(result)
+            if success:
+                # Update database fuel level with actual current fuel
+                await self._apply_refuel()
+            
+            return success
 
         async def equip_left(self) -> bool:
             return await self.send_command("turtle.equipLeft()")
@@ -504,6 +568,20 @@ class Turtle:
             
         async def get_location(self) -> Any:
             return await self.eval("gps.locate()")
+
+        async def set_label(self, label: str) -> bool:
+            # Escape quotes for safe embedding in Lua string
+            escaped = label.replace("\\", "\\\\").replace('"', '\\"')
+            try:
+                result = await self.eval(f'((function() return set_name_tag("{escaped}") end)())')
+                # Convert result to boolean
+                success = bool(result)
+                if success:
+                    # Update database state which triggers frontend notification
+                    self._apply_label(label)
+                return success
+            except Exception as e:
+                return False
 
     def session(self) -> "Turtle._Session":
         """Open an exclusive session with this turtle.
