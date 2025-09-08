@@ -670,18 +670,30 @@ class Turtle:
             try:
                 # Try firmware helper first
                 inventory = await self.eval("get_inventory_details()")
-                # Process each item in the inventory list
-                processed_inventory = []
-                for item in inventory:
-                    # Wrap each item in the expected response format
-                    item_response = {"ok": True, "data": item}
-                    ok, processed_item = self._evaluate_inventory_returns(item_response)
-                    if ok and processed_item:
-                        processed_inventory.append(processed_item)
                 
-                # Apply the cleaned inventory data to the database
-                self._apply_inventory(processed_inventory)
-                return processed_inventory
+                # Process the inventory dictionary (slot -> item data)
+                if isinstance(inventory, dict):
+                    processed_inventory = {}
+                    for slot, item in inventory.items():
+                        if item is not None:
+                            # Wrap each item in the expected response format
+                            item_response = {"ok": True, "data": item}
+                            ok, processed_item = self._evaluate_inventory_returns(item_response)
+                            if ok and processed_item:
+                                # Add slot information to the processed item
+                                processed_item["slot"] = int(slot)
+                                processed_inventory[slot] = processed_item
+                        else:
+                            # Keep empty slots as None
+                            processed_inventory[slot] = None
+                    
+                    # Apply the cleaned inventory data to the database
+                    self._apply_inventory(processed_inventory)
+                    return processed_inventory
+                else:
+                    # If not a dict, apply as-is (fallback case)
+                    self._apply_inventory(inventory)
+                    return inventory
             except Exception as e:
                 self._turtle._logger.warning(f"Failed to get inventory details: {e}")
                 return None
