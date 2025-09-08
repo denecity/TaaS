@@ -41,7 +41,7 @@ from backend.server import Server
 from backend.turtle import Turtle
 import backend.db_state as db_state
 from routines import discover_routines
-from routines.base import Routine
+from routines.routine import Routine
 
 
 # Set up logging with both console and file output
@@ -588,9 +588,9 @@ async def events(ws: WebSocket):
 @app.get("/")
 def dashboard_root() -> FileResponse:
     
-    """Serve the web dashboard entrypoint from `web/static/index.html`."""
+    """Serve the web dashboard entrypoint from `web/index.html`."""
     
-    return FileResponse("web/static/index.html")
+    return FileResponse("web/index.html")
 
 
 # APP: Serve empty favicon to prevent browser 404 errors

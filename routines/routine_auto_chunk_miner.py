@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, List, Tuple
 
-from .base import Routine
+from .routine import Routine
 from backend.server import Turtle
 from .subroutines import dig_to_coordinate, mine_ore_vein, update_inventory, get_inventory_dump_subroutine
 import backend.db_state as db_state

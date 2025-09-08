@@ -2,7 +2,7 @@ import importlib
 import pkgutil
 from typing import Dict
 
-from .base import Routine
+from .routine import Routine
 
 
 def discover_routines() -> Dict[str, Routine]:
