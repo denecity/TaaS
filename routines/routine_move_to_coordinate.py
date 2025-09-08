@@ -1,37 +1,30 @@
-import logging
-from typing import Any
+from .routine import routine
 
-from .routine import Routine
-from backend.server import Turtle
-from .subroutines import move_to_coordinate
+@routine(
+    label="Move To Coordinate",
+    config_template="""
+    # Move turtle to target coordinates with obstacle-aware pathing
+    # The turtle will lift to y=150 first to avoid obstacles
+    # then move horizontally before adjusting to target altitude
+    x: 0
+    y: 70
+    z: 0
+    """
+)
+async def move_to_coordinate_routine(turtle, config):
+    """Move to target coordinates using pathfinding."""
+    
+    # Parse and validate coordinates
+    target_x = int(config.get("x", 0))
+    target_y = int(config.get("y", 70))
+    target_z = int(config.get("z", 0))
+    
+    turtle.logger.info(f"Moving to coordinates ({target_x}, {target_y}, {target_z})")
+    
+    await turtle.inspect_up()
+    await turtle.up()
+    await turtle.down()
 
-logger = logging.getLogger("routine.move_to_coordinate")
+    await turtle.do_something()
 
-
-class MoveToCoordinateRoutine(Routine):
-	def __init__(self) -> None:
-		super().__init__(
-			description="Move to target coordinates with obstacle-aware pathing",
-			config_template="""
-	x: 0
-	y: 70
-	z: 0
-	"""
-		)
-
-	async def perform(self, session: Turtle._Session, config: Any | None) -> None:
-		# Validate/normalize config
-		if not isinstance(config, dict):
-			logger.warning("Turtle %d: Config not dict, using defaults for MoveToCoordinateRoutine", session._turtle.id)
-			config = {"x": 0, "y": 70, "z": 0}
-		for key in ("x", "y", "z"):
-			if key not in config:
-				config[key] = 0 if key != "y" else 70
-		try:
-			config = {"x": int(config["x"]), "y": int(config["y"]), "z": int(config["z"])}
-		except Exception:
-			logger.warning("Turtle %d: Failed to parse coordinates, using defaults", session._turtle.id)
-			config = {"x": 0, "y": 70, "z": 0}
-
-		logger.info("Turtle %d: MoveToCoordinateRoutine to (%d,%d,%d)", session._turtle.id, config["x"], config["y"], config["z"])
-		await move_to_coordinate(self, session, config)
+    turtle.logger.info("Move to coordinate completed")

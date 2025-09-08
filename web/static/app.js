@@ -106,22 +106,21 @@ function headingToText(h) {
     return '—';
 }
 
-function cleanRoutineName(name) {
-    if (!name || name === '—') return name;
-    return name
-        .replace(/^routine_/, '')  // Remove 'routine_' prefix
-        .replace(/_/g, ' ')        // Replace underscores with spaces
-        .replace(/\b\w/g, l => l.toUpperCase()); // Capitalize first letter of each word
-}
-
-function renderTurtle(t) {
+function renderTurtle(t, routines = []) {
     const statusClass = t.alive ? 'connected' : 'disconnected';
     const fuel = t.fuel_level ?? '—';
     const inv = t.inventory ?? null;
     const coords = t.coords ?? {};
     const heading = (t.heading ?? null);
     const btnLabel = currentButtonLabelFromAssignment(t.assignment);
-    const routineName = (t.assignment && t.assignment.routine) ? cleanRoutineName(t.assignment.routine) : '—';
+
+    // Look up routine label
+    let routineName = '—';
+    if (t.assignment && t.assignment.routine) {
+        const routine = routines.find(r => r.name === t.assignment.routine);
+        routineName = routine ? routine.label : t.assignment.routine;
+    }
+
     const titleText = t.label ? `${t.label} (#${t.id})` : `Turtle #${t.id}`;
     return `
     <div class="turtle" data-id="${t.id}">
@@ -182,8 +181,8 @@ function bindItemHandlers(root, routines) {
 
     select.innerHTML = '';
     norm.forEach(r => {
-        const cleanName = cleanRoutineName(r.name);
-        const opt = new Option(cleanName, r.name);  // Display clean name, but keep original value
+        const displayName = r.label || r.name;  // Use label if available, fallback to name
+        const opt = new Option(displayName, r.name);  // Display label, but keep name as value
         if (r.description) opt.title = r.description;
         opt.dataset.template = r.config_template || '';
         select.append(opt);
@@ -274,7 +273,7 @@ function sortTurtles(turtles) {
 
 function renderList(turtles, routines) {
     const sorted = sortTurtles(turtles);
-    el.list.innerHTML = sorted.map(renderTurtle).join('');
+    el.list.innerHTML = sorted.map(t => renderTurtle(t, routines)).join('');
     for (const item of el.list.querySelectorAll('.turtle')) {
         bindItemHandlers(item, routines);
     }
@@ -399,7 +398,7 @@ async function bootstrap() {
                         dbg('New turtle connected, adding to list from event data');
                         try {
                             // Create HTML for new turtle and insert it in the right position (sorted)
-                            const turtleHtml = renderTurtle(t);
+                            const turtleHtml = renderTurtle(t, cachedRoutines);
                             const tempDiv = document.createElement('div');
                             tempDiv.innerHTML = turtleHtml;
                             const newTurtleElement = tempDiv.firstElementChild;
@@ -486,7 +485,9 @@ async function bootstrap() {
                     // Update routine name display
                     if (routineEl) {
                         if (data.routine) {
-                            routineEl.textContent = cleanRoutineName(data.routine);
+                            // Look up routine label from cached routines
+                            const routine = cachedRoutines.find(r => r.name === data.routine);
+                            routineEl.textContent = routine ? routine.label : data.routine;
                         } else if (data.type === 'routine_aborted' || data.type === 'routine_finished' || data.type === 'routine_failed') {
                             routineEl.textContent = '—';
                         }

@@ -41,7 +41,7 @@ from backend.server import Server
 from backend.turtle import Turtle
 import backend.db_state as db_state
 from routines import discover_routines
-from routines.routine import Routine
+from routines.routine import RoutineWrapper
 
 
 # Set up logging with both console and file output
@@ -202,7 +202,7 @@ app.add_middleware(
 
 server = Server() # Initialize the TCP server that manages connections to ComputerCraft turtles
 
-routine_registry: Dict[str, Routine] = discover_routines()
+routine_registry: Dict[str, RoutineWrapper] = discover_routines()
 logger.info(f"Discovered {len(routine_registry)} routines: {list(routine_registry.keys())}")
 
 # Track running routine tasks by turtle ID to enable cancellation
@@ -483,7 +483,7 @@ def list_routines():
     for name, routine in routine_registry.items():
         out.append({
             "name": name,
-            "description": routine.description,
+            "label": routine.label,
             "config_template": routine.config_template,
         })
     return out

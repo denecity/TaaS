@@ -665,11 +665,14 @@ class Turtle:
         async def get_location(self) -> Any:
             return await self.eval("gps.locate()")
 
-        @_log_turtle_operation
         async def get_inventory_details(self) -> Any:
+            """Get inventory details with clean logging and tag filtering."""
             try:
                 # Try firmware helper first
                 inventory = await self.eval("get_inventory_details()")
+                
+                # Debug: Log what format we actually got
+                self._turtle._logger.info(f"Turtle {self._turtle.id}: Raw inventory type: {type(inventory)}, len: {len(inventory) if hasattr(inventory, '__len__') else 'N/A'}")
                 
                 # Process the inventory dictionary (slot -> item data)
                 if isinstance(inventory, dict):
@@ -689,13 +692,45 @@ class Turtle:
                     
                     # Apply the cleaned inventory data to the database
                     self._apply_inventory(processed_inventory)
+                    
+                    # Log clean summary instead of full data
+                    filled_slots = sum(1 for item in processed_inventory.values() if item is not None)
+                    total_slots = len(processed_inventory)
+                    self._turtle._logger.info(f"Turtle {self._turtle.id}: get_inventory_details → {filled_slots}/{total_slots} slots filled (clean)")
+                    
+                    return processed_inventory
+                elif isinstance(inventory, list):
+                    # Handle list format - convert to processed format
+                    processed_inventory = {}
+                    for i, item in enumerate(inventory):
+                        slot = i + 1  # 1-indexed slots
+                        if item is not None:
+                            # Wrap each item in the expected response format
+                            item_response = {"ok": True, "data": item}
+                            ok, processed_item = self._evaluate_inventory_returns(item_response)
+                            if ok and processed_item:
+                                # Add slot information to the processed item
+                                processed_item["slot"] = slot
+                                processed_inventory[slot] = processed_item
+                        else:
+                            # Keep empty slots as None
+                            processed_inventory[slot] = None
+                    
+                    # Apply the cleaned inventory data to the database
+                    self._apply_inventory(processed_inventory)
+                    
+                    # Log clean summary
+                    filled_slots = sum(1 for item in processed_inventory.values() if item is not None)
+                    total_slots = len(processed_inventory)
+                    self._turtle._logger.info(f"Turtle {self._turtle.id}: get_inventory_details → {filled_slots}/{total_slots} slots filled (clean)")
+                    
                     return processed_inventory
                 else:
-                    # If not a dict, apply as-is (fallback case)
-                    self._apply_inventory(inventory)
-                    return inventory
+                    # If not a dict or list, we have a problem - don't store raw data
+                    self._turtle._logger.warning(f"Turtle {self._turtle.id}: get_inventory_details → unexpected format: {type(inventory)}")
+                    return None
             except Exception as e:
-                self._turtle._logger.warning(f"Failed to get inventory details: {e}")
+                self._turtle._logger.warning(f"Turtle {self._turtle.id}: get_inventory_details failed: {e}")
                 return None
 
         @_log_turtle_operation            

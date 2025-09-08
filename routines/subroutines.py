@@ -1,14 +1,13 @@
 import logging
 from typing import Any, Dict, List
 
-from .routine import Routine
 from backend.server import Turtle
 import backend.db_state as db_state
 
 logger = logging.getLogger("subroutines")
 
 
-async def mine_ore_vein(self: Routine, session: Turtle._Session, config: Any | None) -> None:
+async def mine_ore_vein(self, session: Turtle._Session, config: Any | None) -> None:
 	"""Flood-fill mine any connected 'ore' vein in 6 directions (includes up/down).
 
 	The turtle will pathfind over already mined cells to the nearest discovered ore,
@@ -208,31 +207,32 @@ async def mine_ore_vein(self: Routine, session: Turtle._Session, config: Any | N
 	logger.info("Turtle %d: mine_ore_vein complete", session._turtle.id)
 
 
-async def move_to_coordinate(self: Routine, session: Turtle._Session, config: Any | None) -> None:
+async def move_to_coordinate(turtle, target_x: int, target_y: int, target_z: int) -> None:
 	"""Move to specified coordinates with simple obstacle-aware pathing.
-
-	Config expects: {"x": int, "y": int, "z": int}. The routine:
+	
 	- Lifts to ~y=150 first to reduce collisions
 	- Moves horizontally (x then z) with inspect/dig before each step
 	- Finishes with vertical adjustment to target y
 	- Uses an L1 distance-based step threshold: max(500, 4*L1)
 	"""
-	if not isinstance(config, dict) or not {"x", "y", "z"}.issubset(config.keys()):
-		logger.error("Turtle %d: move_to_coordinate missing x/y/z in config", session._turtle.id)
+	# Get current position
+	position = await turtle.get_location()
+	if not position:
+		turtle.logger.error("Could not get current position")
 		return
-
+	
+	x, y, z = position
+	tx, ty, tz = int(target_x), int(target_y), int(target_z)
+	
+	# Get current heading from database
 	def get_state() -> Dict[str, Any]:
 		try:
-			return db_state.get_state(session._turtle.id) or {}
+			import backend.db_state as db_state
+			return db_state.get_state(turtle.session._turtle.id) or {}
 		except Exception:
 			return {}
-
+	
 	st = get_state()
-	coords = st.get("coords") or {"x": 0, "y": 0, "z": 0}
-	x, y, z = int(coords.get("x", 0)), int(coords.get("y", 0)), int(coords.get("z", 0))
-	tx, ty, tz = int(config["x"]), int(config["y"]), int(config["z"])
-
-	# Heading 0:+X, 1:+Z, 2:-X, 3:-Z
 	heading = st.get("heading") if isinstance(st.get("heading"), int) else 0
 	dir_vecs: List[tuple[int,int,int]] = [(1,0,0),(0,0,1),(-1,0,0),(0,0,-1)]
 
@@ -247,70 +247,80 @@ async def move_to_coordinate(self: Routine, session: Turtle._Session, config: An
 		while heading != target_idx:
 			cw = (target_idx - heading) % 4
 			if cw == 1:
-				await self.turn_right(); heading = (heading + 1) % 4
+				await turtle.turn_right(); heading = (heading + 1) % 4
 			elif cw == 2:
-				await self.turn_right(); await self.turn_right(); heading = (heading + 2) % 4
+				await turtle.turn_right(); await turtle.turn_right(); heading = (heading + 2) % 4
 			else:
-				await self.turn_left(); heading = (heading + 3) % 4
+				await turtle.turn_left(); heading = (heading + 3) % 4
 
 	async def step_forward_checked() -> bool:
 		nonlocal x, z, steps
-		ok, _info = await self.inspect()
-		if ok:
-			await self.dig()
-		# clear headroom before moving
-		ok_u, _ = await session.inspect_up()
-		if ok_u:
-			await self.dig_up()
-		ok2 = await self.forward()
-		if ok2:
+		# Check for block ahead and dig if needed
+		block_ahead = await turtle.inspect()
+		if block_ahead:
+			await turtle.dig()
+		
+		# Clear headroom before moving
+		block_up = await turtle.inspect_block("up")
+		if block_up:
+			await turtle.dig_up()
+		
+		# Try to move forward
+		if await turtle.forward():
 			vx, _, vz = dir_vecs[heading]
 			x += vx; z += vz
-			# clear headroom after moving
-			ok_u2, _ = await session.inspect_up()
-			if ok_u2:
-				await self.dig_up()
+			
+			# Clear headroom after moving
+			block_up2 = await turtle.inspect_block("up")
+			if block_up2:
+				await turtle.dig_up()
+			
 			steps += 1
 			return True
+		
 		# Try to go up to bypass obstacle
-		ok_u, _up = await session.inspect_up()
-		if ok_u:
-			await self.dig_up()
-		if await self.up():
+		block_up_bypass = await turtle.inspect_block("up")
+		if block_up_bypass:
+			await turtle.dig_up()
+		
+		if await turtle.up():
 			steps += 1
-			ok2 = await step_forward_checked()
-			if ok2:
-				# come back down to resume height corridor
-				await self.down(); steps += 1
+			if await step_forward_checked():
+				# Come back down to resume height corridor
+				await turtle.down(); steps += 1
 				return True
 			else:
-				await self.down(); steps += 1
+				await turtle.down(); steps += 1
+		
 		# Try side-step: right then left
-		await self.turn_right(); heading = (heading + 1) % 4
-		ok_side, _ = await self.inspect()
-		if ok_side:
-			await self.dig()
-		if await self.forward():
-			vx,_,vz = dir_vecs[heading]; x += vx; z += vz; steps += 1
-			await self.turn_left(); heading = (heading + 3) % 4
+		await turtle.turn_right(); heading = (heading + 1) % 4
+		block_side = await turtle.inspect_block("forward")
+		if block_side:
+			await turtle.dig()
+		
+		if await turtle.forward():
+			vx, _, vz = dir_vecs[heading]; x += vx; z += vz; steps += 1
+			await turtle.turn_left(); heading = (heading + 3) % 4
 			return True
-		await self.turn_left(); heading = (heading + 3) % 4
+		
+		await turtle.turn_left(); heading = (heading + 3) % 4
 		return False
 
 	async def step_vertical(to_up: bool) -> bool:
 		nonlocal y, steps
 		if to_up:
-			ok_u, _ = await session.inspect_up()
-			if ok_u:
-				await self.dig_up()
-			ok = await self.up()
+			block_up = await turtle.inspect_block("up")
+			if block_up:
+				await turtle.dig_up()
+			ok = await turtle.up()
 			if ok: y += 1
 		else:
-			ok_d, _ = await session.inspect_down()
-			if ok_d:
-				await self.dig_down()
-			ok = await self.down()
+			block_down = await turtle.inspect_block("down")
+			if block_down:
+				await turtle.dig_down()
+			ok = await turtle.down()
 			if ok: y -= 1
+		
 		if ok:
 			steps += 1
 		return ok
@@ -326,7 +336,7 @@ async def move_to_coordinate(self: Routine, session: Turtle._Session, config: An
 		dir_idx = 0 if tx > x else 2
 		await face_dir(dir_idx)
 		if not await step_forward_checked():
-			# try slight altitude change to bypass
+			# Try slight altitude change to bypass
 			if not await step_vertical(True):
 				await step_vertical(False)
 
@@ -346,11 +356,11 @@ async def move_to_coordinate(self: Routine, session: Turtle._Session, config: An
 		if not await step_vertical(False):
 			break
 
-	logger.info("Turtle %d: move_to_coordinate finished at (%d,%d,%d) target=(%d,%d,%d) steps=%d threshold=%d",
-				 session._turtle.id, x, y, z, tx, ty, tz, steps, threshold)
+	turtle.logger.info("move_to_coordinate finished at (%d,%d,%d) target=(%d,%d,%d) steps=%d threshold=%d",
+					  x, y, z, tx, ty, tz, steps, threshold)
 
 
-async def dig_to_coordinate(self: Routine, session: Turtle._Session, config: Any | None) -> None:
+async def dig_to_coordinate(self, session: Turtle._Session, config: Any | None) -> None:
 	"""Move in a straight L1 path to target coordinates, digging blocks ahead.
 
 	Config expects: {"x": int, "y": int, "z": int}.
@@ -455,7 +465,7 @@ async def dig_to_coordinate(self: Routine, session: Turtle._Session, config: Any
 				 session._turtle.id, x, y, z, tx, ty, tz)
 
 
-async def update_inventory(self: Routine, session: Turtle._Session) -> List[Dict[str, Any]]:
+async def update_inventory(self, session: Turtle._Session) -> List[Dict[str, Any]]:
 	"""Fetch inventory details from firmware and store in DB; fallback if needed.
 
 	Returns a list of non-empty slot entries if fallback path is used; otherwise
@@ -481,7 +491,7 @@ async def update_inventory(self: Routine, session: Turtle._Session) -> List[Dict
 		return items
 
 
-async def dump_to_left_chest(self: Routine, session: Turtle._Session, config: Any | None) -> None:
+async def dump_to_left_chest(self, session: Turtle._Session, config: Any | None) -> None:
 	"""Place a chest to the left and dump all inventory into it (except chests).
 
 	Config options:
@@ -534,3 +544,201 @@ def get_inventory_dump_subroutine(name: str):
 	if name == "dump_to_left_chest":
 		return dump_to_left_chest
 	return dump_to_left_chest
+
+async def do_something(turtle) -> None:
+	await turtle.inspect_up()
+	await turtle.up()
+	await turtle.down()
+
+	return
+ 
+ 
+ 
+ 
+
+
+# ============================================================================
+# Basic Turtle Operation Wrappers
+# ============================================================================
+# These functions provide clean syntax for basic turtle operations in routines
+
+# Movement operations
+async def forward(turtle) -> bool:
+	"""Move turtle forward one block."""
+	return await turtle.session.forward()
+
+async def back(turtle) -> bool:
+	"""Move turtle backward one block."""
+	return await turtle.session.back()
+
+async def up(turtle) -> bool:
+	"""Move turtle up one block."""
+	return await turtle.session.up()
+
+async def down(turtle) -> bool:
+	"""Move turtle down one block."""
+	return await turtle.session.down()
+
+async def turn_left(turtle) -> bool:
+	"""Turn turtle left 90 degrees."""
+	return await turtle.session.turn_left()
+
+async def turn_right(turtle) -> bool:
+	"""Turn turtle right 90 degrees."""
+	return await turtle.session.turn_right()
+
+# Digging operations
+async def dig(turtle) -> bool:
+	"""Dig block in front of turtle."""
+	return await turtle.session.dig()
+
+async def dig_up(turtle) -> bool:
+	"""Dig block above turtle."""
+	return await turtle.session.dig_up()
+
+async def dig_down(turtle) -> bool:
+	"""Dig block below turtle."""
+	return await turtle.session.dig_down()
+
+# Placing operations
+async def place(turtle) -> bool:
+	"""Place block in front of turtle."""
+	return await turtle.session.place()
+
+async def place_up(turtle) -> bool:
+	"""Place block above turtle."""
+	return await turtle.session.place_up()
+
+async def place_down(turtle) -> bool:
+	"""Place block below turtle."""
+	return await turtle.session.place_down()
+
+# Item operations
+async def select(turtle, slot: int) -> bool:
+	"""Select inventory slot."""
+	return await turtle.session.select(slot)
+
+async def suck(turtle) -> bool:
+	"""Suck items from in front."""
+	return await turtle.session.suck()
+
+async def suck_up(turtle) -> bool:
+	"""Suck items from above."""
+	return await turtle.session.suck_up()
+
+async def suck_down(turtle) -> bool:
+	"""Suck items from below."""
+	return await turtle.session.suck_down()
+
+async def drop(turtle, count: int = None) -> bool:
+	"""Drop items in front."""
+	return await turtle.session.drop(count)
+
+async def drop_up(turtle, count: int = None) -> bool:
+	"""Drop items above."""
+	return await turtle.session.drop_up(count)
+
+async def drop_down(turtle, count: int = None) -> bool:
+	"""Drop items below."""
+	return await turtle.session.drop_down(count)
+
+# Inventory information
+async def get_selected_slot(turtle) -> int:
+	"""Get currently selected slot number."""
+	return await turtle.session.get_selected_slot()
+
+async def get_item_count(turtle) -> int:
+	"""Get item count in selected slot."""
+	return await turtle.session.get_item_count()
+
+async def get_item_space(turtle) -> int:
+	"""Get available space in selected slot."""
+	return await turtle.session.get_item_space()
+
+async def get_item_detail(turtle):
+	"""Get details of item in selected slot."""
+	return await turtle.session.get_item_detail()
+
+# Comparison operations
+async def compare(turtle) -> bool:
+	"""Compare selected item with block in front."""
+	return await turtle.session.compare()
+
+async def compare_up(turtle) -> bool:
+	"""Compare selected item with block above."""
+	return await turtle.session.compare_up()
+
+async def compare_down(turtle) -> bool:
+	"""Compare selected item with block below."""
+	return await turtle.session.compare_down()
+
+async def compare_to(turtle, slot: int) -> bool:
+	"""Compare selected item with item in specified slot."""
+	return await turtle.session.compare_to(slot)
+
+async def transfer_to(turtle, slot: int, count: int = None) -> bool:
+	"""Transfer items to specified slot."""
+	return await turtle.session.transfer_to(slot, count)
+
+# Fuel operations
+async def get_fuel_level(turtle):
+	"""Get current fuel level."""
+	return await turtle.session.get_fuel_level()
+
+async def get_fuel_limit(turtle) -> int:
+	"""Get maximum fuel capacity."""
+	return await turtle.session.get_fuel_limit()
+
+async def refuel(turtle, count: int) -> bool:
+	"""Refuel using items from selected slot."""
+	return await turtle.session.refuel(count)
+
+# Equipment operations
+async def equip_left(turtle) -> bool:
+	"""Equip item from selected slot to left side."""
+	return await turtle.session.equip_left()
+
+async def equip_right(turtle) -> bool:
+	"""Equip item from selected slot to right side."""
+	return await turtle.session.equip_right()
+
+# Inspection operations
+async def inspect(turtle):
+	"""Inspect block in front of turtle."""
+	return await turtle.session.inspect()
+
+async def inspect_up(turtle):
+	"""Inspect block above turtle."""
+	return await turtle.session.inspect_up()
+
+async def inspect_down(turtle):
+	"""Inspect block below turtle."""
+	return await turtle.session.inspect_down()
+
+# Location operations
+async def get_location(turtle):
+	"""Get current GPS coordinates."""
+	return await turtle.session.get_location()
+
+# Inventory operations
+async def get_inventory_details(turtle):
+	"""Get detailed inventory information."""
+	return await turtle.session.get_inventory_details()
+
+# Label operations
+async def get_label(turtle):
+	"""Get turtle's current label."""
+	return await turtle.session.get_label()
+
+async def set_label(turtle, label: str) -> bool:
+	"""Set turtle's label."""
+	return await turtle.session.set_label(label)
+
+# Command operations
+async def send_command(turtle, command: str) -> bool:
+	"""Send a raw command to turtle."""
+	return await turtle.session.send_command(command)
+
+async def eval(turtle, code: str):
+	"""Evaluate Lua code on turtle."""
+	return await turtle.session.eval(code)
