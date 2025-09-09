@@ -109,7 +109,7 @@ class MyRoutine(Routine):
 CREATE TABLE turtles (
     turtle_id INTEGER PRIMARY KEY,
     fuel_level INTEGER,
-    inventory_json TEXT,
+    inventory TEXT,
     x INTEGER, y INTEGER, z INTEGER,
     heading INTEGER,
     connection_status TEXT,

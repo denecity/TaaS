@@ -41,17 +41,6 @@ async def auto_chunk_miner_routine(turtle, config):
 	tunnel_spacing = max(1, config.get("tunnel_spacing", 3))
 	layer_step = max(1, config.get("layer_step", 3))
 
-	# Get starting position
-	st = db_state.get_state(turtle.session._turtle.id)
-	coords = st.get("coords") or {"x": 0, "y": 0, "z": 0}
-	x0, y0, z0 = int(coords.get("x", 0)), int(coords.get("y", 0)), int(coords.get("z", 0))
-	cx, cz = _chunk_origin(x0, z0)
-	width = 16 * chunks_x
-	depth = 16 * chunks_z
-	ne_x, ne_z = cx + width - 1, cz  # north-east corner
-
-	turtle.logger.info(f"AutoChunkMiner start at ({x0},{y0},{z0}); area x:[{cx}..{cx+width-1}] z:[{cz}..{cz+depth-1}] (chunks_x={chunks_x}, chunks_z={chunks_z})")
-
 	async def check_and_trigger_ore_mining(ok: bool, info: Dict[str, Any] | None) -> bool:
 		"""Check if block is ore and trigger vein mining if so."""
 		try:
@@ -62,8 +51,8 @@ async def auto_chunk_miner_routine(turtle, config):
 			turtle.logger.info(f"Ore detected ({name}); triggering mine_ore_vein")
 			await turtle.mine_ore_vein({})
 			turtle.logger.info("Vein mining complete, updating inventory")
-			await update_inventory_helper()
-			await maybe_refuel()
+
+			await turtle.refuel_if_possible()
 			await maybe_dump()
 			return True
 		return False
@@ -102,76 +91,10 @@ async def auto_chunk_miner_routine(turtle, config):
 		if left_found or right_found:
 			return
 
-	async def update_inventory_helper():
-		"""Update inventory in database."""
-		try:
-			await turtle.get_inventory_details()
-			turtle.logger.info("Inventory updated successfully")
-		except Exception as e:
-			turtle.logger.warning(f"Inventory update failed: {e}")
-
-	async def maybe_refuel():
-		"""Refuel if fuel is low and coal is available."""
-		try:
-			fuel = await turtle.get_fuel_level()
-			if fuel is None or fuel >= fuel_threshold:
-				return
-			
-			# Get inventory from DB to find coal
-			st = db_state.get_state(turtle.session._turtle.id)
-			inv = st.get("inventory_json")
-			if not inv:
-				return
-				
-			import json as _json
-			obj = _json.loads(inv) if isinstance(inv, str) else inv
-			coal_slot = None
-			
-			if isinstance(obj, dict):
-				for k, v in obj.items():
-					if not v: 
-						continue
-					try:
-						name = str(v.get("name") or "")
-						display = str(v.get("displayName") or "")
-						if ("coal" in name.lower()) or ("coal" in display.lower()):
-							coal_slot = int(k)
-							break
-					except Exception:
-						continue
-			
-			if coal_slot is None:
-				return
-				
-			await turtle.select(coal_slot)
-			await turtle.refuel(100000)
-		except Exception as e:
-			turtle.logger.debug(f"Refuel failed: {e}")
-
-	async def count_empty_slots() -> int:
-		"""Count empty inventory slots."""
-		try:
-			st = db_state.get_state(turtle.session._turtle.id)
-			inv = st.get("inventory_json")
-			if not inv:
-				return 0
-				
-			import json as _json
-			obj = _json.loads(inv) if isinstance(inv, str) else inv
-			
-			if isinstance(obj, dict):
-				return sum(1 for v in obj.values() if not v)
-			elif isinstance(obj, list):
-				occupied = len(obj)
-				return max(0, 16 - occupied)
-		except Exception:
-			pass
-		return 0
-
 	async def maybe_dump():
 		"""Dump inventory if too full."""
 		try:
-			empty_slots = await count_empty_slots()
+			empty_slots = await turtle.count_empty_slots()
 			if empty_slots > empty_slots_threshold:
 				return
 			
@@ -183,89 +106,78 @@ async def auto_chunk_miner_routine(turtle, config):
 				turtle.logger.warning(f"Unknown dump strategy: {dump_strategy}")
 		except Exception as e:
 			turtle.logger.warning(f"Dump failed: {e}")
-
-	# Move to NE corner at start_y
-	await turtle.dig_to_coordinate({"x": ne_x, "y": start_y, "z": ne_z})
-
-	# Zig-zag strip mining for each layer
+   
+   
+   	# Get starting position
+	# Get current position and determine chunk boundaries
+	position = await turtle.get_location()
+	if not position:
+		turtle.logger.error("Could not get current position")
+		return
+	
+	x0, y0, z0 = position
+	cx, cz = _chunk_origin(x0, z0)
+	width = 16 * chunks_x
+	depth = 16 * chunks_z
+	
+	# Calculate south-east corner of the chunk area (highest X, highest Z)
+	se_x = cx + width - 1
+	se_z = cz + depth - 1
+	
+	turtle.logger.info(f"AutoChunkMiner: Current position ({x0},{y0},{z0}), chunk area x:[{cx}..{cx+width-1}] z:[{cz}..{cz+depth-1}]")
+	turtle.logger.info(f"Moving to south-east corner at ({se_x},{start_y},{se_z}) to begin mining")
+	
+	# Move to south-east corner at start_y
+	await turtle.dig_to_coordinate({"x": se_x, "y": start_y, "z": se_z})
+	
+	# Face north (heading=3, -Z direction) to start mining consistently
+	for _ in range(4):
+		if db_state.get_state(turtle.session._turtle.id).get("heading") == 3:
+			break
+		await turtle.turn_right()
+	
+	turtle.logger.info("Positioned at south-east corner, facing north, ready to start systematic mining")
+	
+	# Systematic mining from south-east corner, going north in strips
 	current_y = start_y
 	while current_y >= stop_y:
-		turtle.logger.info(f"Mining layer {current_y} in area x:[{cx}..{cx+width-1}] z:[{cz}..{cz+depth-1}]")
-
-		# Ensure we are at NE corner at this layer
-		await turtle.dig_to_coordinate({"x": ne_x, "y": current_y, "z": ne_z})
-
-		# Snake along Z direction with configurable spacing
-		go_east_to_west = True
-		for row_z in range(cz, cz + depth, tunnel_spacing):
-			if go_east_to_west:
-				# Start from east edge, go west
-				await turtle.dig_to_coordinate({"x": ne_x, "y": current_y, "z": row_z})
-				
-				# Face west (-X direction, heading=2)
-				for _ in range(4):
-					if db_state.get_state(turtle.session._turtle.id).get("heading") == 2:
-						break
-					await turtle.turn_right()
-				
-				# Traverse west across the width
-				for _ in range(max(0, width - 1)):
-					await scan_and_maybe_mine()
-					ok, _ = await turtle.inspect()
-					if ok: 
-						await turtle.dig()
-					
-					# Clear headroom before move
-					ok_u, _ = await turtle.inspect_up()
-					if ok_u: 
-						await turtle.dig_up()
-					
-					if not await turtle.forward(): 
-						break
-					
-					# Clear headroom after move
-					ok_u2, _ = await turtle.inspect_up()
-					if ok_u2: 
-						await turtle.dig_up()
-			else:
-				# Start from west edge, go east
-				await turtle.dig_to_coordinate({"x": cx, "y": current_y, "z": row_z})
-				
-				# Face east (+X direction, heading=0)
-				for _ in range(4):
-					if db_state.get_state(turtle.session._turtle.id).get("heading") == 0:
-						break
-					await turtle.turn_right()
-				
-				# Traverse east across the width
-				for _ in range(max(0, width - 1)):
-					await scan_and_maybe_mine()
-					ok, _ = await turtle.inspect()
-					if ok: 
-						await turtle.dig()
-					
-					# Clear headroom before move
-					ok_u, _ = await turtle.inspect_up()
-					if ok_u: 
-						await turtle.dig_up()
-					
-					if not await turtle.forward(): 
-						break
-					
-					# Clear headroom after move
-					ok_u2, _ = await turtle.inspect_up()
-					if ok_u2: 
-						await turtle.dig_up()
-
-			# Alternate direction for next row
-			go_east_to_west = not go_east_to_west
-
+		turtle.logger.info(f"Mining layer {current_y}")
+		
+		# Return to south-east corner for this layer
+		await turtle.dig_to_coordinate({"x": se_x, "y": current_y, "z": se_z})
+		
+		# Face north for consistent mining direction
+		for _ in range(4):
+			if db_state.get_state(turtle.session._turtle.id).get("heading") == 3:
+				break
+			await turtle.turn_right()
+		
+		# Mine strips going north, spaced by tunnel_spacing
+		for strip_x in range(se_x, cx - 1, -tunnel_spacing):  # Go from east to west
+			# Go to start of this strip
+			await turtle.dig_to_coordinate({"x": strip_x, "y": current_y, "z": se_z})
+			
+			# Face north
+			for _ in range(4):
+				if db_state.get_state(turtle.session._turtle.id).get("heading") == 3:
+					break
+				await turtle.turn_right()
+			
+			# Mine north across the depth
+			for _ in range(depth - 1):
+				await scan_and_maybe_mine()
+				if not await turtle.force_dig_forward():
+					break
+				await turtle.dig_up()
+				await turtle.refuel_if_possible()
+				await maybe_dump()
+		
 		# Drop down to next layer
 		for _ in range(layer_step):
 			ok_d, _ = await turtle.inspect_down()
-			if ok_d: 
+			if ok_d:
 				await turtle.dig_down()
-			if not await turtle.down(): 
+			if not await turtle.down():
 				break
 		current_y -= layer_step
 

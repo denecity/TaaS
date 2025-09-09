@@ -265,7 +265,9 @@ class Turtle:
         # Send a command to the turtle and wait for response
         async def _send(self, line: str) -> Dict[str, Any]:
             if not self._turtle._alive:
-                raise RuntimeError("turtle is not connected")
+                self._turtle._logger.warning("Attempted to send command to disconnected turtle")
+                return {"ok": False, "error": "turtle disconnected"}
+            
             req_id = f"s_{uuid.uuid4().hex}"
             payload = {"id": req_id, "command": line}
             fut: asyncio.Future = asyncio.get_running_loop().create_future()
@@ -274,9 +276,12 @@ class Turtle:
                 await self._turtle._ws.send(json.dumps(payload))
                 resp = await asyncio.wait_for(fut, timeout=30)
                 return resp
+            except asyncio.TimeoutError:
+                self._turtle._logger.warning("Command timeout: %s", line)
+                return {"ok": False, "error": "timeout"}
             except Exception as e:
-                self._turtle._logger.error("session: send failed id=%s cmd=%s error=%s", req_id, line, e)
-                raise
+                self._turtle._logger.warning("Send failed for command '%s': %s", line, e)
+                return {"ok": False, "error": str(e)}
             finally:
                 self._turtle._pending.pop(req_id, None)
 
@@ -290,9 +295,11 @@ class Turtle:
         # Evaluate a Lua expression and return the result
         async def eval(self, line: str) -> Any:
             resp = await self._send(line)
-            if not resp.get("ok"):
-                self._turtle._logger.error("session: eval failed: %s", resp)
-                raise RuntimeError("eval failed")
+            resp_ok = bool(resp.get("ok"))
+            if not resp_ok: #means eval returned false
+                # Log the full response for debugging
+                self._turtle._logger.warning("session: eval command failed: %s, response: %s", line, resp)
+                return False
             return resp.get("value")
 
         # Get the current state from the database
@@ -338,8 +345,8 @@ class Turtle:
             try:
                 if inventory_data is not None:
                     import json as _json
-                    inventory_json = _json.dumps(inventory_data)
-                    db_state.set_state(self._turtle.id, inventory_json=inventory_json)
+                    inventory = _json.dumps(inventory_data)
+                    db_state.set_state(self._turtle.id, inventory=inventory)
                     self._turtle._logger.debug(f"Updated inventory for turtle {self._turtle.id}")
             except Exception as e:
                 self._turtle._logger.warning(f"Failed to update inventory: {e}")
@@ -424,7 +431,7 @@ class Turtle:
                 # Result is a tuple/array: [false, reason] or [true]
                 success = bool(result[0])
             else:
-                # Result is a single boolean
+                # Result is a single boolean (or False from failed eval)
                 success = bool(result)
             
             if success:
@@ -439,6 +446,7 @@ class Turtle:
                     self._apply_movement(dx=-1, fuel_cost=1)
                 elif heading == 3:
                     self._apply_movement(dz=-1, fuel_cost=1)
+            
             return success
 
         @_log_turtle_operation
@@ -517,11 +525,33 @@ class Turtle:
 
         @_log_turtle_operation
         async def dig(self) -> bool:
-            return await self.send_command("turtle.dig()")
+            # turtle.dig() returns true on success, false on failure, or [false, reason] on failure with reason
+            result = await self.eval("turtle.dig()")
+            
+            # Handle the different return types from turtle.dig()
+            if isinstance(result, list) and len(result) >= 1:
+                # Result is a tuple/array: [false, reason] or [true]
+                success = bool(result[0])
+            else:
+                # Result is a single boolean
+                success = bool(result)
+            
+            return success
 
         @_log_turtle_operation
         async def place(self) -> bool:
-            return await self.send_command("turtle.place()")
+            # turtle.place() returns true on success, false on failure, or [false, reason] on failure with reason
+            result = await self.eval("turtle.place()")
+            
+            # Handle the different return types from turtle.place()
+            if isinstance(result, list) and len(result) >= 1:
+                # Result is a tuple/array: [false, reason] or [true]
+                success = bool(result[0])
+            else:
+                # Result is a single boolean
+                success = bool(result)
+            
+            return success
 
         @_log_turtle_operation
         async def select(self, slot: int) -> bool:
@@ -529,19 +559,63 @@ class Turtle:
 
         @_log_turtle_operation
         async def dig_up(self) -> bool:
-            return await self.send_command("turtle.digUp()")
+            # turtle.digUp() returns true on success, false on failure, or [false, reason] on failure with reason
+            result = await self.eval("turtle.digUp()")
+            
+            # Handle the different return types from turtle.digUp()
+            if isinstance(result, list) and len(result) >= 1:
+                # Result is a tuple/array: [false, reason] or [true]
+                success = bool(result[0])
+            else:
+                # Result is a single boolean
+                success = bool(result)
+            
+            return success
 
         @_log_turtle_operation
         async def dig_down(self) -> bool:
-            return await self.send_command("turtle.digDown()")
+            # turtle.digDown() returns true on success, false on failure, or [false, reason] on failure with reason
+            result = await self.eval("turtle.digDown()")
+            
+            # Handle the different return types from turtle.digDown()
+            if isinstance(result, list) and len(result) >= 1:
+                # Result is a tuple/array: [false, reason] or [true]
+                success = bool(result[0])
+            else:
+                # Result is a single boolean
+                success = bool(result)
+            
+            return success
 
         @_log_turtle_operation
         async def place_up(self) -> bool:
-            return await self.send_command("turtle.placeUp()")
+            # turtle.placeUp() returns true on success, false on failure, or [false, reason] on failure with reason
+            result = await self.eval("turtle.placeUp()")
+            
+            # Handle the different return types from turtle.placeUp()
+            if isinstance(result, list) and len(result) >= 1:
+                # Result is a tuple/array: [false, reason] or [true]
+                success = bool(result[0])
+            else:
+                # Result is a single boolean
+                success = bool(result)
+            
+            return success
 
         @_log_turtle_operation
         async def place_down(self) -> bool:
-            return await self.send_command("turtle.placeDown()")
+            # turtle.placeDown() returns true on success, false on failure, or [false, reason] on failure with reason
+            result = await self.eval("turtle.placeDown()")
+            
+            # Handle the different return types from turtle.placeDown()
+            if isinstance(result, list) and len(result) >= 1:
+                # Result is a tuple/array: [false, reason] or [true]
+                success = bool(result[0])
+            else:
+                # Result is a single boolean
+                success = bool(result)
+            
+            return success
 
         @_log_turtle_operation
         async def suck(self) -> bool:

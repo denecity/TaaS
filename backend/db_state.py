@@ -39,7 +39,7 @@ def init() -> None:
             first_seen_ms INTEGER,
             last_seen_ms INTEGER,
             fuel_level INTEGER,
-            inventory_json TEXT,
+            inventory TEXT,
             x INTEGER,
             y INTEGER,
             z INTEGER,
@@ -161,7 +161,7 @@ def get_state(turtle_id: int) -> Dict[str, Any]:
     conn = _conn()
     cur = conn.cursor()
     cur.execute(
-        "SELECT fuel_level, inventory_json, x, y, z, heading, name, label, connection_status FROM turtles WHERE turtle_id=?",
+        "SELECT fuel_level, inventory, x, y, z, heading, name, label, connection_status FROM turtles WHERE turtle_id=?",
         (turtle_id,),
     )
     r = cur.fetchone()
@@ -183,7 +183,7 @@ def set_state(
     turtle_id: int,
     *,
     fuel_level: Optional[int] = None,
-    inventory_json: Optional[str] = None,
+    inventory: Optional[str] = None,
     coords: Optional[Tuple[int, int, int]] = None,
     heading: Optional[int] = None,
     connection_status: Optional[str] = None,
@@ -201,19 +201,19 @@ def set_state(
             """
             UPDATE turtles
             SET fuel_level=COALESCE(?, fuel_level),
-                inventory_json=COALESCE(?, inventory_json),
+                inventory=COALESCE(?, inventory),
                 x=COALESCE(?, x), y=COALESCE(?, y), z=COALESCE(?, z),
                 heading=COALESCE(?, heading),
                 connection_status=COALESCE(?, connection_status),
                 label=COALESCE(?, label)
             WHERE turtle_id=?
             """,
-            (fuel_level, inventory_json, x, y, z, heading, connection_status, label, turtle_id),
+            (fuel_level, inventory, x, y, z, heading, connection_status, label, turtle_id),
         )
     else:
         cur.execute(
-            "INSERT INTO turtles(turtle_id, fuel_level, inventory_json, x, y, z, heading, connection_status, label) VALUES (?,?,?,?,?,?,?,?,?)",
-            (turtle_id, fuel_level, inventory_json, x, y, z, heading, connection_status or "disconnected", label),
+            "INSERT INTO turtles(turtle_id, fuel_level, inventory, x, y, z, heading, connection_status, label) VALUES (?,?,?,?,?,?,?,?,?)",
+            (turtle_id, fuel_level, inventory, x, y, z, heading, connection_status or "disconnected", label),
         )
     conn.commit()
     conn.close()
