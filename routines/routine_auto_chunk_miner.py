@@ -160,7 +160,7 @@ async def auto_chunk_miner_routine(turtle, config):
 			# Face north
 			for _ in range(4):
 				if db_state.get_state(turtle.session._turtle.id).get("heading") == 3:
-					break
+					break 
 				await turtle.turn_right()
 			
 			# Mine north across the depth
