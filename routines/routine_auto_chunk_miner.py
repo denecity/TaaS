@@ -19,7 +19,6 @@ stop_y: 20
 empty_slots_threshold: 4
 chest_slot: 1
 dump_strategy: dump_to_left_chest
-fuel_threshold: 500
 chunks_x: 1
 chunks_z: 1
 tunnel_spacing: 3
@@ -35,7 +34,6 @@ async def auto_chunk_miner_routine(turtle, config):
 	empty_slots_threshold = config.get("empty_slots_threshold", 4)
 	chest_slot = config.get("chest_slot", 1)
 	dump_strategy = config.get("dump_strategy", "dump_to_left_chest")
-	fuel_threshold = config.get("fuel_threshold", 500)
 	chunks_x = max(1, config.get("chunks_x", 1))
 	chunks_z = max(1, config.get("chunks_z", 1))
 	tunnel_spacing = max(1, config.get("tunnel_spacing", 3))
@@ -53,7 +51,7 @@ async def auto_chunk_miner_routine(turtle, config):
 			turtle.logger.info("Vein mining complete, updating inventory")
 
 			await turtle.refuel_if_possible()
-			await maybe_dump()
+			await maybe_dump(dump_strategy)
 			return True
 		return False
 
@@ -91,17 +89,16 @@ async def auto_chunk_miner_routine(turtle, config):
 		if left_found or right_found:
 			return
 
-	async def maybe_dump():
+	async def maybe_dump(dump_strategy):
 		"""Dump inventory if too full."""
 		try:
 			empty_slots = await turtle.count_empty_slots()
 			if empty_slots > empty_slots_threshold:
 				return
 			
-			# Call the appropriate dump subroutine
-			if hasattr(turtle, dump_strategy):
-				dump_fn = getattr(turtle, dump_strategy)
-				await dump_fn({"chest_slot": chest_slot})
+			if dump_strategy == "dump_to_left_chest":
+				turtle.logger.info("Inventory low on space, dumping to left chest")
+				await turtle.dump_to_left_chest(chest_slot)
 			else:
 				turtle.logger.warning(f"Unknown dump strategy: {dump_strategy}")
 		except Exception as e:

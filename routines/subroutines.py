@@ -442,17 +442,8 @@ async def dig_to_coordinate(turtle, config: dict = None) -> None:
 	turtle.logger.info(f"dig_to_coordinate finished at ({x},{y},{z}) target=({tx},{ty},{tz})")
 
 
-async def dump_to_left_chest(turtle, config: dict = None) -> None:
-	"""Place a chest to the left and dump all inventory into it (except chests).
-
-	Config options:
-	- chest_slot: int (default 1)
-	"""
-	chest_slot = 1
-	if isinstance(config, dict):
-		chest_slot = config.get("chest_slot", chest_slot)
-	chest_slot = max(1, min(16, chest_slot))
-
+async def dump_to_left_chest(turtle, chest_slot=1) -> None:
+	"""Place a chest to the left and dump all inventory into it (except chests)."""
 	# Ensure chest slot selected and has items
 	await turtle.select(chest_slot)
 	count = await turtle.get_item_count()
@@ -502,21 +493,23 @@ async def force_dig_forward(turtle) -> bool:
 	return False
 
 
-def get_inventory_dump_subroutine(name: str):
-	"""Return a dumping subroutine function by name."""
-	if name == "dump_to_left_chest":
-		return dump_to_left_chest
-	# Add other dump strategies here as needed
-	return dump_to_left_chest
-
-
 async def do_something(turtle) -> None:
 	await turtle.inspect_up()
 	await turtle.up()
 	await turtle.down()
 
 	return
+
+async def return_location(turtle) -> Dict[str, int]:
+	"""Return the current coordinates of the turtle."""
+	await turtle.get_location()
  
+	turtle_id = turtle.session._turtle.id
+	st = db_state.get_state(turtle_id)
+	x = st.get("x")
+	y = st.get("y")
+	z = st.get("z")
+	return {"x": x, "y": y, "z": z}
  
 async def count_empty_slots(turtle) -> int:
 	"""Count empty inventory slots."""
@@ -536,24 +529,24 @@ async def count_empty_slots(turtle) -> int:
 
 
 async def refuel_if_possible(turtle) -> None:
-		"""Refuel if coal is available in inventory."""
-		await turtle.get_inventory_details()
-		inventory = json.loads(db_state.get_state(turtle.session._turtle.id).get("inventory"))
+	"""Refuel if coal is available in inventory."""
+	await turtle.get_inventory_details()
+	inventory = json.loads(db_state.get_state(turtle.session._turtle.id).get("inventory"))
 
-		for key, item in inventory.items():
-			if not item:
-				continue
-			if item.get("name") == "minecraft:coal" and await turtle.get_fuel_level() < await turtle.get_fuel_limit()-5000:
-				await turtle.select(int(key))
-				await turtle.refuel(100000)
-				continue
+	for key, item in inventory.items():
+		if not item:
+			continue
+		if item.get("name") == "minecraft:coal" and await turtle.get_fuel_level() < await turtle.get_fuel_limit()-5000:
+			await turtle.select(int(key))
+			await turtle.refuel(100000)
+			continue
 
-		if await turtle.get_fuel_level() < await turtle.get_fuel_limit() - 5000:
-			logging.warning("Turtle could be losing fuel over time")
-			return
-		else:
-			logging.info("Turtle fuel level is sufficient")
-			return
+	if await turtle.get_fuel_level() < await turtle.get_fuel_limit() - 5000:
+		logging.warning("Turtle could be losing fuel over time")
+		return
+	else:
+		logging.info("Turtle fuel level is sufficient")
+		return
 
 
 # ============================================================================
