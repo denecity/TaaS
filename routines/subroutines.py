@@ -55,7 +55,7 @@ async def mine_ore_vein(turtle, config: dict = None) -> None:
 
 	async def step_forward_local() -> bool:
 		nonlocal pos
-		ok = await force_dig_forward(turtle)
+		ok = await dig_forward(turtle)
 		if ok:
 			pos = add_vec(pos, dir_vecs[dir_idx])
 		return ok
@@ -406,7 +406,7 @@ async def dig_to_coordinate(turtle, config: dict = None) -> None:
 		target_heading = 0 if tx > x else 2  # 0: +X, 2: -X
 		heading = await face_direction(target_heading)
   
-		if await turtle.force_dig_forward():
+		if await turtle.dig_forward():
 			x += 1 if tx > x else -1
 		else:
 			turtle.logger.warning("X movement blocked")
@@ -416,7 +416,7 @@ async def dig_to_coordinate(turtle, config: dict = None) -> None:
 	while z != tz:
 		target_heading = 1 if tz > z else 3  # 1: +Z, 3: -Z
 		heading = await face_direction(target_heading)
-		if await turtle.force_dig_forward():
+		if await turtle.dig_forward():
 			z += 1 if tz > z else -1
 		else:
 			turtle.logger.warning("Z movement blocked")
@@ -479,17 +479,49 @@ async def dump_to_left_chest(turtle, chest_slot=1) -> None:
 	# Restore heading
 	await turtle.turn_right()
 
+async def dump_to_ender_chest(turtle, chest_slot=1) -> None:
+	"""Place a chest to the left and dump all inventory into it (except chests)."""
+	# Ensure chest slot selected and has items
+	await turtle.select(chest_slot)
 
-async def force_dig_forward(turtle) -> bool:
+	# Turn left and place chest ahead; dig if blocked
+	turtle.logger.info("dump_to_ender_chest")
+	await turtle.turn_left()
+	ok, info = await turtle.inspect()
+	if ok:
+		await turtle.dig()
+	
+	placed = await turtle.place()
+
+	
+	if not placed:
+		turtle.logger.warning("dump_to_ender_chest: failed to place chest")
+		await turtle.turn_right()
+		return
+
+	# Dump all items except chests slot
+	for slot in range(1, 17):
+		if slot == chest_slot:
+			continue
+		await turtle.select(slot)
+		await turtle.drop()
+
+	# Restore heading
+	await turtle.select(chest_slot)
+	await turtle.dig()
+	await turtle.turn_right()
+
+
+async def dig_forward(turtle) -> bool:
 	attempts = 0
 	max_attempts = 20
 	while attempts < max_attempts:
 		if await turtle.forward():
-			turtle.logger.debug(f"force_dig_forward: success after {attempts + 1} attempts")
+			turtle.logger.debug(f"dig_forward: success after {attempts + 1} attempts")
 			return True
 		await turtle.dig()
 		attempts += 1
-	turtle.logger.warning(f"force_dig_forward: failed after {max_attempts} attempts")
+	turtle.logger.warning(f"dig_forward: failed after {max_attempts} attempts")
 	return False
 
 
@@ -734,3 +766,16 @@ async def send_command(turtle, command: str) -> bool:
 async def eval(turtle, code: str):
 	"""Evaluate Lua code on turtle."""
 	return await turtle.session.eval(code)
+
+
+
+"""
+TODO Routines
+
+- check_inventory_for(name = "minecraft:coal") -> (bool, slot, count)
+- get_location() -> (x,y,z,h)
+- mine_vein(stay_in_chunk = True) #modification
+- dump_to_right_chest() #check for chest first
+- dump_to_ender_chest() #check for ender chest
+
+"""

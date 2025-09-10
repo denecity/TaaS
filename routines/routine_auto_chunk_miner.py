@@ -163,11 +163,11 @@ async def auto_chunk_miner_routine(turtle, config):
 			# Mine north across the depth
 			for _ in range(depth - 1):
 				await scan_and_maybe_mine()
-				if not await turtle.force_dig_forward():
+				if not await turtle.dig_forward():
 					break
 				await turtle.dig_up()
 				await turtle.refuel_if_possible()
-				await maybe_dump()
+				await maybe_dump(dump_strategy)
 		
 		# Drop down to next layer
 		for _ in range(layer_step):
