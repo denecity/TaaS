@@ -176,13 +176,13 @@ class Turtle:
                                 x2, y2, z2 = int(loc2_list[0]), int(loc2_list[1]), int(loc2_list[2])
                                 dx, dz = x2 - loc1[0], z2 - loc1[2]
                                 if dx == 1 and dz == 0:
-                                    heading_val = 0  # +X
+                                    heading_val = (0 - rotations)%4  # +X
                                 elif dx == -1 and dz == 0:
-                                    heading_val = 2  # -X
+                                    heading_val = (2 - rotations)%4  # -X
                                 elif dz == 1 and dx == 0:
-                                    heading_val = 1  # +Z
+                                    heading_val = (1 - rotations)%4  # +Z
                                 elif dz == -1 and dx == 0:
-                                    heading_val = 3  # -Z
+                                    heading_val = (3 - rotations)%4  # -Z
                                 self._logger.info("Heading detected: %s", heading_val)
                         except Exception as e:
                             self._logger.warning("Heading detection movement failed: %s", e)
@@ -326,6 +326,27 @@ class Turtle:
             heading = st.get("heading")
             heading = (heading + delta) % 4
             db_state.set_state(self._turtle.id, heading=heading)
+            
+        # Update the turtle's coordinates in the database from GPS location
+        def _apply_location(self, loc: Any) -> None:
+            try:
+                if loc is None:
+                    # GPS returned None - no GPS hosts available
+                    return
+                
+                if isinstance(loc, list) and len(loc) >= 3:
+                    # Validate all coordinates are numbers
+                    if all(isinstance(v, (int, float)) for v in loc[:3]):
+                        x, y, z = int(loc[0]), int(loc[1]), int(loc[2])
+                        coords_tuple = (x, y, z)
+                        db_state.set_state(self._turtle.id, coords=coords_tuple)
+                        self._turtle._logger.debug(f"Updated coordinates to {coords_tuple}")
+                    else:
+                        self._turtle._logger.warning(f"Invalid GPS coordinates format: {loc}")
+                else:
+                    self._turtle._logger.warning(f"Unexpected GPS response format: {loc}")
+            except Exception as e:
+                self._turtle._logger.warning(f"Failed to update location in database: {e}")
 
         # Update the turtle's label in the database
         def _apply_label(self, label: str) -> None:
@@ -737,7 +758,10 @@ class Turtle:
 
         @_log_turtle_operation            
         async def get_location(self) -> Any:
-            return await self.eval("gps.locate()")
+            loc = await self.eval("gps.locate()")
+            # Update database with the new location
+            self._apply_location(loc)
+            return loc
             
 
         async def get_inventory_details(self) -> Any:

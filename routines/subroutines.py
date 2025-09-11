@@ -489,7 +489,8 @@ async def dump_to_ender_chest(turtle, chest_slot=1) -> None:
 	await turtle.turn_left()
 	ok, info = await turtle.inspect()
 	if ok:
-		await turtle.dig()
+		await turtle.dig_forward()
+		await turtle.back()
 	
 	placed = await turtle.place()
 
@@ -770,7 +771,6 @@ async def inspect_down(turtle):
 async def get_location(turtle):
 	"""Get current GPS coordinates."""
 	location = await turtle.session.get_location()
-	db_state.set("coords", location)
 	return location
 
 # Inventory operations
