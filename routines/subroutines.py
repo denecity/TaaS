@@ -580,6 +580,33 @@ async def refuel_if_possible(turtle) -> None:
 		logging.info("Turtle fuel level is sufficient")
 		return
 
+async def set_heading(turtle, heading: int = 3) -> None:
+	"""Set the turtle's heading to a specific direction (0:+X,1:+Z,2:-X,3:-Z).
+ 	North: heading=3, -Z direction.
+  	"""
+	if heading not in {0, 1, 2, 3}:
+		logging.error("Invalid heading value. Must be 0, 1, 2, or 3.")
+		return
+	
+	# Get current heading from database
+	st = db_state.get_state(turtle.session._turtle.id) or {}
+	current_heading = st.get("heading") if isinstance(st.get("heading"), int) else 0
+
+	while current_heading != heading:
+		cw = (heading - current_heading) % 4
+		if cw == 1:
+			await turtle.turn_right()
+			current_heading = (current_heading + 1) % 4
+		elif cw == 2:
+			await turtle.turn_right()
+			await turtle.turn_right()
+			current_heading = (current_heading + 2) % 4
+		else:
+			await turtle.turn_left()
+			current_heading = (current_heading + 3) % 4
+	# Update heading in database
+	return current_heading
+
 
 # ============================================================================
 # Basic Turtle Operation Wrappers
