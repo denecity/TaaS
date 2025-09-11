@@ -738,6 +738,7 @@ class Turtle:
         @_log_turtle_operation            
         async def get_location(self) -> Any:
             return await self.eval("gps.locate()")
+            
 
         async def get_inventory_details(self) -> Any:
             """Get inventory details with clean logging and tag filtering."""

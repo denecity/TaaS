@@ -100,10 +100,10 @@ def dig_calculation(start_x, start_z, width, height) -> list:
     label="Smart Full Miner",
     config_template="""
 # Auto chunk mining configuration
-corner_1: [286, 24]  # (x, z) of one corner of the area to mine
-corner_2: [277, 12]  # (x, z) of the opposite corner of the area to mine
+corner_1: [296, 9]  # (x, z) of one corner of the area to mine
+corner_2: [315, -11]  # (x, z) of the opposite corner of the area to mine
 start_y: 63
-stop_y: 59
+stop_y: -20
 empty_slots_threshold: 4
 chest_slot: 1
 dump_strategy: dump_to_ender_chest
@@ -256,8 +256,7 @@ async def smart_mine_full_routine(turtle, config):
                 return
         else:
             turtle.logger.warning(f"Unknown point class: {point_class_i}")
-            return
-                
+            return            
                  
     async def dig_chute(turtle, top_or_bottom, start_y, stop_y, point_class_i, edge_direction_i, corner_direction_i):
         """Dig a chute from start_y to stop_y based on point classification.
@@ -303,13 +302,11 @@ async def smart_mine_full_routine(turtle, config):
         if top_or_bottom == 1:
             logging.getLogger("turtle").info(f"Starting chute {i_chute + 1}/{len(fixed_points)} at ({curr_chute_x}, {start_y}, {curr_chute_z})")
             await turtle.dig_to_coordinate({"x": curr_chute_x, "y": start_y, "z": curr_chute_z})
-            # Make absolutely sure that turtle is east facing (heading=0, -Z direction)
             await dig_chute(turtle, top_or_bottom, start_y, stop_y, point_class[i_chute], edge_direction[i_chute], corner_direction[i_chute])
             top_or_bottom = 2
         elif top_or_bottom == 2:
             logging.getLogger("turtle").info(f"Starting chute {i_chute + 1}/{len(fixed_points)} at ({curr_chute_x}, {stop_y}, {curr_chute_z})")
             await turtle.dig_to_coordinate({"x": curr_chute_x, "y": stop_y, "z": curr_chute_z})
-            # Make absolutely sure that turtle is east facing (heading=0, -Z direction)
             await dig_chute(turtle, top_or_bottom, start_y, stop_y, point_class[i_chute], edge_direction[i_chute], corner_direction[i_chute])
             top_or_bottom = 1
     

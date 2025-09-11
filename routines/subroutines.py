@@ -769,7 +769,9 @@ async def inspect_down(turtle):
 # Location operations
 async def get_location(turtle):
 	"""Get current GPS coordinates."""
-	return await turtle.session.get_location()
+	location = await turtle.session.get_location()
+	db_state.set("coords", location)
+	return location
 
 # Inventory operations
 async def get_inventory_details(turtle):
