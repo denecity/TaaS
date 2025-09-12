@@ -1,0 +1,10 @@
+tunnel: turtle-api-tunnel
+credentials-file: /home/denec/.cloudflared/5058a27b-9ff1-4875-9eb1-c18f865af2ac.json
+
+ingress:
+  - hostname: turtle.mykinsky.org
+    path: /ws*
+    service: ws://localhost:5000
+  - hostname: turtle.mykinsky.org
+    service: http://localhost:8000
+  - service: http_status:404
