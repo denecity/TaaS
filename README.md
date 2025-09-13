@@ -1,4 +1,4 @@
-# Turtles-as-a-Service (TaAS)
+# Turtles-as-a-Service (TaaS)
 
 Server-driven control plane for ComputerCraft turtles with real-time state management and unified routine execution. Centralizes logic on auxiliary servers—nothing runs "on the turtle."
 
